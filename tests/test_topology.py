@@ -509,6 +509,69 @@ def test_powermodels_preview_infers_missing_bus_voltage_from_incident_branches()
     assert {bus["base_kv"] for bus in case["bus"].values()} == {400.0}
 
 
+def test_powermodels_preview_uses_endpoint_voltage_for_untagged_branch_parameters() -> None:
+    rows = [
+        {
+            "osm_type": "node",
+            "osm_id": 130,
+            "power": "substation",
+            "name": "Alpha",
+            "voltage": "400000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.30,
+            "lon": 114.10,
+            "tags_json": '{"operator": "CLP Power", "voltage": "400000"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "node",
+            "osm_id": 131,
+            "power": "substation",
+            "name": "Beta",
+            "voltage": "400000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.31,
+            "lon": 114.11,
+            "tags_json": '{"operator": "CLP Power", "voltage": "400000"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "way",
+            "osm_id": 132,
+            "power": "line",
+            "name": "Untagged voltage tie",
+            "voltage": None,
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": "1",
+            "location": None,
+            "lat": 22.305,
+            "lon": 114.105,
+            "tags_json": '{"operator": "CLP Power"}',
+            "geometry_json": '[{"lat": 22.3000, "lon": 114.1000}, {"lat": 22.3100, "lon": 114.1100}]',
+            "updated_at": "2026-01-01 00:00:00",
+        },
+    ]
+
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+
+    branch = next(iter(case["branch"].values()))
+    assert branch["rate_a"] == 1800.0
+    assert branch["matched_voltage_kv"] == 400.0
+    assert branch["parameter_table"] == "overhead_line_defaults"
+
+
 def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
     rows = [
         *_sample_rows(),

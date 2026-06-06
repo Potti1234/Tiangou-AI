@@ -1070,9 +1070,30 @@ def _infer_missing_bus_voltages(
     branches: list[Mapping[str, Any]],
 ) -> dict[str, Any]:
     incident_voltages: dict[str, list[float]] = {bus["id"]: [] for bus in buses}
+    tagged_voltage_by_bus = {
+        bus["id"]: float(bus["base_kv"])
+        for bus in buses
+        if bus.get("base_kv") is not None
+    }
     for branch in branches:
         voltage_kv = branch.get("voltage_kv")
         if voltage_kv is None:
+            endpoint_ids = [
+                str(endpoint)
+                for endpoint in (branch.get("from_bus_id"), branch.get("to_bus_id"))
+                if endpoint in incident_voltages
+            ]
+            endpoint_voltages = [
+                tagged_voltage_by_bus[endpoint]
+                for endpoint in endpoint_ids
+                if endpoint in tagged_voltage_by_bus
+            ]
+            if not endpoint_voltages:
+                continue
+            inferred_branch_voltage = _consensus_voltage(endpoint_voltages)
+            for endpoint in endpoint_ids:
+                if endpoint not in tagged_voltage_by_bus:
+                    incident_voltages[endpoint].append(inferred_branch_voltage)
             continue
         for endpoint in (branch.get("from_bus_id"), branch.get("to_bus_id")):
             if endpoint in incident_voltages:
@@ -1486,9 +1507,11 @@ def _powermodels_branch(
     bus_id_map: Mapping[str, str],
     bus_by_id: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    voltage_kv = branch.get("voltage_kv") or 132.0
+    voltage_kv = branch.get("voltage_kv") or _branch_endpoint_voltage(branch, bus_by_id) or 132.0
     length_km = branch.get("length_km") or 1.0
-    defaults = branch.get("parameter_defaults") or {}
+    defaults = dict(branch.get("parameter_defaults") or {})
+    if defaults.get("rate_mva") is None and voltage_kv is not None:
+        defaults.update(_branch_defaults(str(branch.get("power") or "line"), float(voltage_kv)))
     transformer_info = _inferred_transformer_info(branch, bus_by_id)
     if transformer_info is None:
         r_ohm = (defaults.get("r_ohm_per_km") or 0.08) * length_km
@@ -1543,7 +1566,20 @@ def _powermodels_branch(
         "b_us_per_km": defaults.get("b_us_per_km"),
         "length_km": length_km,
         **({"transformer_inference": transformer_info} if transformer_info is not None else {}),
-    }
+}
+
+
+def _branch_endpoint_voltage(
+    branch: Mapping[str, Any],
+    bus_by_id: Mapping[str, Mapping[str, Any]],
+) -> float | None:
+    voltages = []
+    for endpoint in (branch.get("from_bus_id"), branch.get("to_bus_id")):
+        bus = bus_by_id.get(str(endpoint))
+        base_kv = bus.get("base_kv") if bus is not None else None
+        if base_kv is not None:
+            voltages.append(float(base_kv))
+    return max(voltages) if voltages else None
 
 
 def _inferred_transformer_info(
@@ -1559,15 +1595,30 @@ def _inferred_transformer_info(
     from_kv = from_bus.get("base_kv")
     to_kv = to_bus.get("base_kv")
     branch_kv = branch.get("voltage_kv")
-    if from_kv is None or to_kv is None or branch_kv is None:
+    if from_kv is None or to_kv is None:
         return None
     from_kv = float(from_kv)
     to_kv = float(to_kv)
-    branch_kv = float(branch_kv)
-    if min(from_kv, to_kv, branch_kv) <= 0:
+    if min(from_kv, to_kv) <= 0:
         return None
 
     endpoint_ratio = max(from_kv, to_kv) / min(from_kv, to_kv)
+    if branch_kv is None:
+        if endpoint_ratio < 1.5:
+            return None
+        return {
+            "method": "missing_branch_voltage_endpoint_pair_conversion",
+            "from_bus_base_kv": from_kv,
+            "to_bus_base_kv": to_kv,
+            "branch_voltage_kv": max(from_kv, to_kv),
+            "high_kv": max(from_kv, to_kv),
+            "low_kv": min(from_kv, to_kv),
+            "confidence": 0.5,
+        }
+
+    branch_kv = float(branch_kv)
+    if branch_kv <= 0:
+        return None
     from_branch_delta = abs(from_kv - branch_kv) / branch_kv
     to_branch_delta = abs(to_kv - branch_kv) / branch_kv
     severe_branch_mismatch = max(from_branch_delta, to_branch_delta) >= 0.5
