@@ -270,6 +270,14 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert {"peak_16h", "overnight_04h"} <= {row["snapshot"] for row in analytics_payload["charts"]["demand_snapshots"]}
     assert analytics_payload["transparency"]["assumption_summary"]["provenance_counts"] == analytics_payload["metadata_cards"]["observed_inferred_synthetic_row_counts"]
     assert analytics_payload["solver_artifacts"]["raw_powermodels_export_generated"] in {True, False}
+    assert analytics_payload["solver_artifacts"]["latest_raw_powermodels_export"] is None or set(analytics_payload["solver_artifacts"]["latest_raw_powermodels_export"]) >= {
+        "status",
+        "output_path",
+        "output_exists",
+        "demand_snapshot",
+        "bus_count",
+        "branch_count",
+    }
     assert "57-bus/63-branch case can export raw PowerModels" in analytics_payload["solver_artifacts"]["feasibility_warning"]
 
 

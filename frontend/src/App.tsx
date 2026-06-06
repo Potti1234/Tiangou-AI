@@ -343,6 +343,18 @@ type AnalyticsDashboardPayload = {
     manifest_path: string
     manifest_exists: boolean
     manifest_export_count: number
+    latest_raw_powermodels_export: {
+      status: string
+      output_path: string | null
+      output_exists: boolean
+      demand_snapshot: string | null
+      bus_count: number | null
+      branch_count: number | null
+      load_count?: number | null
+      gen_count?: number | null
+      total_pd_mw?: number | null
+      total_pmax_mw?: number | null
+    } | null
     feasibility_warning: string
   }
 }
@@ -919,6 +931,7 @@ function AnalyticsDashboardTabs({ analytics }: { analytics: AnalyticsDashboardPa
     ["PyG export generated", analytics.solver_artifacts.pyg_export_generated],
     ["Scenario files generated", analytics.solver_artifacts.scenario_files_generated],
   ] as const
+  const latestExport = analytics.solver_artifacts.latest_raw_powermodels_export
 
   return (
     <TooltipProvider>
@@ -1020,6 +1033,20 @@ function AnalyticsDashboardTabs({ analytics }: { analytics: AnalyticsDashboardPa
           </ChartPanel>
           <ChartPanel title="Solver artifact status">
             <div className="space-y-1.5">
+              {latestExport && (
+                <div className="rounded-[4px] border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-zinc-700">Latest raw PowerModels export</span>
+                    <Badge variant="outline" className={cn("rounded-[3px]", latestExport.output_exists ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-amber-300 bg-amber-50 text-amber-900")}>
+                      {latestExport.status.replaceAll("_", " ")}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 truncate font-mono text-[11px] text-zinc-500">{latestExport.output_path ?? "No output path in manifest"}</p>
+                  <p className="mt-1 text-zinc-600">
+                    {latestExport.demand_snapshot ?? "unknown snapshot"}, {formatNumber(latestExport.bus_count)} buses, {formatNumber(latestExport.branch_count)} branches
+                  </p>
+                </div>
+              )}
               {artifactRows.map(([label, ok]) => (
                 <div key={label} className="flex items-center justify-between gap-2 rounded-[4px] border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-xs">
                   <span className="text-zinc-600">{label}</span>

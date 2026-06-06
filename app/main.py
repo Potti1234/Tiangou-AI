@@ -149,6 +149,32 @@ def _handoff_artifact_summary() -> dict[str, Any]:
     }
 
 
+def _latest_manifest_export_summary(manifest: Any) -> dict[str, Any] | None:
+    if not isinstance(manifest, dict):
+        return None
+    exports = manifest.get("exports")
+    if not isinstance(exports, list) or not exports:
+        return None
+    latest = exports[-1]
+    if not isinstance(latest, dict):
+        return None
+    metadata = latest.get("metadata") if isinstance(latest.get("metadata"), dict) else {}
+    output_path = latest.get("output_path")
+    output_exists = Path(output_path).exists() if isinstance(output_path, str) else False
+    return {
+        "status": "generated" if output_exists else "missing_output",
+        "output_path": output_path,
+        "output_exists": output_exists,
+        "demand_snapshot": latest.get("demand_snapshot") or metadata.get("demand_snapshot"),
+        "bus_count": metadata.get("bus_count"),
+        "branch_count": metadata.get("branch_count"),
+        "load_count": metadata.get("load_count"),
+        "gen_count": metadata.get("gen_count"),
+        "total_pd_mw": metadata.get("total_pd_mw"),
+        "total_pmax_mw": metadata.get("total_pmax_mw"),
+    }
+
+
 def _latest_ingest_payload(row: Any) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
@@ -273,6 +299,7 @@ def _pipeline_summary_payload(
             "manifest_path": handoff_artifacts["manifest_path"],
             "manifest_exists": handoff_artifacts["manifest_exists"],
             "manifest_export_count": len(handoff_artifacts["manifest"].get("exports", [])) if isinstance(handoff_artifacts.get("manifest"), dict) else 0,
+            "latest_raw_powermodels_export": _latest_manifest_export_summary(handoff_artifacts.get("manifest")),
             "feasibility_warning": handoff_artifacts["feasibility_warning"],
         },
     }
