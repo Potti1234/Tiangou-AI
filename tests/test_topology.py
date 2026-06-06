@@ -1083,6 +1083,23 @@ def test_demo_full_osm_promotes_lamma_generators_with_synthetic_connections() ->
     assert {generator["energy_source"] for generator in lamma_winds} == {"wind"}
 
 
+def test_lamma_winds_reconciliation_reports_below_solver_threshold() -> None:
+    rows = [*_sample_rows(), *_sample_lamma_generation_rows()]
+    topology = build_topology_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2, min_solver_generator_mw=1.0)
+
+    reconciliation = build_asset_reconciliation(rows, topology, case)
+    by_name = {asset["name"]: asset for asset in reconciliation["generation_assets"]}
+
+    assert by_name["Lamma Power Station"]["status"] == "retained_solver_generator_via_synthetic_connection"
+    assert by_name["Lamma Winds Plant"]["status"] == "below_solver_generator_threshold"
+    assert by_name["Lamma Winds Generator"]["status"] == "below_solver_generator_threshold"
+    assert all(
+        generator["source_id"] not in {"gen:way:323123016", "gen:way:323123015"}
+        for generator in case["gen"].values()
+    )
+
+
 def test_demo_full_osm_retains_more_branches_than_strict_policy() -> None:
     rows = [*_sample_rows(), *_sample_lamma_generation_rows()]
 
