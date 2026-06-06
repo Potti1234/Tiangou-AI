@@ -1,17 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertTriangle,
+  Building2,
   Cable,
   CircleDot,
+  Cross,
   Database,
   Factory,
   GitBranch,
   Layers3,
   Loader2,
   MapPinned,
+  Plane,
+  PlugZap,
   RadioTower,
   RotateCcw,
   ServerCog,
+  Ship,
+  TrainFront,
   X,
   Zap,
 } from "lucide-react"
@@ -218,6 +224,18 @@ type DashboardSnapshot = {
   summary: PipelineSummary
 }
 
+type ConsumerProxyMarker = {
+  id: string
+  name: string | null
+  proxy_type: string
+  sector: string
+  weight: number
+  confidence: number | null
+  lat: number
+  lon: number
+  reason: string
+}
+
 type StageStatus = "not_run" | "running" | "warning" | "error" | "complete" | "ok"
 type Mode = "raw" | "reconstructed" | "solver" | "validation" | "handoff"
 
@@ -225,6 +243,12 @@ type PowerStyle = {
   label: string
   color: string
   marker: string
+  icon: typeof Zap
+}
+
+type ConsumerProxyStyle = {
+  label: string
+  color: string
   icon: typeof Zap
 }
 
@@ -255,6 +279,7 @@ const API_BASE_URL =
 
 const HONG_KONG_CENTER: [number, number] = [114.1694, 22.3193]
 const POLL_MS = 60000
+const IMPORTANT_CONSUMER_LIMIT = 1000
 
 const MODES: Array<{ id: Mode; label: string; stage: string; icon: typeof Layers3 }> = [
   { id: "raw", label: "Raw OSM", stage: "raw_osm", icon: Database },
@@ -284,8 +309,31 @@ const FALLBACK_STYLE: PowerStyle = {
   icon: CircleDot,
 }
 
+const CONSUMER_PROXY_STYLES: Record<string, ConsumerProxyStyle> = {
+  data_center: { label: "Data center", color: "#2563eb", icon: Database },
+  hospital: { label: "Hospital", color: "#dc2626", icon: Cross },
+  charging_station: { label: "EV charger", color: "#16a34a", icon: PlugZap },
+  station: { label: "Station", color: "#0891b2", icon: TrainFront },
+  ferry_terminal: { label: "Ferry terminal", color: "#0284c7", icon: Ship },
+  airport: { label: "Airport", color: "#0f766e", icon: Plane },
+  terminal: { label: "Terminal", color: "#0f766e", icon: Plane },
+  industrial_infrastructure: { label: "Industrial infrastructure", color: "#ea580c", icon: Factory },
+  large_industrial_proxy: { label: "Large industrial proxy", color: "#c2410c", icon: Factory },
+  large_commercial_proxy: { label: "Large commercial proxy", color: "#a16207", icon: Building2 },
+}
+
+const FALLBACK_CONSUMER_PROXY_STYLE: ConsumerProxyStyle = {
+  label: "Consumer proxy",
+  color: "#7c3aed",
+  icon: CircleDot,
+}
+
 function styleFor(power: string) {
   return POWER_STYLES[power] ?? FALLBACK_STYLE
+}
+
+function consumerProxyStyleFor(reason: string) {
+  return CONSUMER_PROXY_STYLES[reason] ?? FALLBACK_CONSUMER_PROXY_STYLE
 }
 
 function assetKey(asset: GridAsset) {
@@ -298,6 +346,10 @@ function assetSourceId(asset: GridAsset) {
 
 function assetTitle(asset: GridAsset) {
   return asset.name || asset.tags["name:en"] || `${styleFor(asset.power).label} ${asset.osm_id}`
+}
+
+function consumerProxyTitle(proxy: ConsumerProxyMarker) {
+  return proxy.name || `${consumerProxyStyleFor(proxy.reason).label} ${proxy.id}`
 }
 
 function statusLabel(status: StageStatus | undefined) {
@@ -528,6 +580,20 @@ function PointMarker({ point }: { point: PointLayer }) {
       style={{ width: point.size, height: point.size, backgroundColor: point.color }}
     >
       <Icon className="size-3.5 text-white" strokeWidth={2.2} />
+    </div>
+  )
+}
+
+function ConsumerProxyMapMarker({ proxy }: { proxy: ConsumerProxyMarker }) {
+  const style = consumerProxyStyleFor(proxy.reason)
+  const Icon = style.icon
+  const size = Math.max(16, Math.min(28, 14 + Math.sqrt(Math.max(proxy.weight, 1)) / 34))
+  return (
+    <div
+      className="grid place-items-center rounded-[5px] border border-white shadow-[0_10px_30px_-14px_rgba(24,24,27,0.9)] ring-1 ring-zinc-950/20"
+      style={{ width: size, height: size, backgroundColor: style.color }}
+    >
+      <Icon className="size-3.5 text-white" strokeWidth={2.25} />
     </div>
   )
 }
@@ -878,6 +944,8 @@ function RawPanel({
 
 function App() {
   const [assets, setAssets] = useState<GridAsset[]>([])
+  const [consumerProxies, setConsumerProxies] = useState<ConsumerProxyMarker[]>([])
+  const [showConsumerProxies, setShowConsumerProxies] = useState(true)
   const [topology, setTopology] = useState<TopologyPreview | null>(null)
   const [caseData, setCaseData] = useState<PowerModelsCase | null>(null)
   const [summary, setSummary] = useState<PipelineSummary | null>(null)
@@ -900,12 +968,20 @@ function App() {
     if (showLoading) setLoading(true)
     setError(null)
     try {
-      const response = await fetch(`${API_BASE_URL}/grid/dashboard-snapshot?${query}`, {
-        signal: controller.signal,
-      })
+      const [response, consumerResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}/grid/dashboard-snapshot?${query}`, {
+          signal: controller.signal,
+        }),
+        fetch(`${API_BASE_URL}/grid/consumer-proxies/important?region_key=hong-kong&limit=${IMPORTANT_CONSUMER_LIMIT}`, {
+          signal: controller.signal,
+        }),
+      ])
       if (!response.ok) throw new Error(`API returned ${response.status}`)
+      if (!consumerResponse.ok) throw new Error(`Consumer proxy API returned ${consumerResponse.status}`)
       const snapshot = await response.json() as DashboardSnapshot
+      const importantConsumerProxies = await consumerResponse.json() as ConsumerProxyMarker[]
       setAssets(snapshot.assets)
+      setConsumerProxies(importantConsumerProxies)
       setTopology(snapshot.topology)
       setCaseData(snapshot.powermodels_case)
       setSummary(snapshot.summary)
@@ -1146,6 +1222,11 @@ function App() {
     return points
   }, [assetsWithLocation, caseBusByNumber, caseData, mode, topology])
 
+  const visibleConsumerProxies = useMemo(
+    () => showConsumerProxies ? consumerProxies.filter((proxy) => Number.isFinite(proxy.lat) && Number.isFinite(proxy.lon)) : [],
+    [consumerProxies, showConsumerProxies],
+  )
+
   const pointAssets = useMemo(
     () => assetsWithLocation.filter((asset) => !isLinearAsset(asset) && !isSupportAsset(asset)),
     [assetsWithLocation],
@@ -1212,6 +1293,30 @@ function App() {
                 </MarkerTooltip>
               </MapMarker>
             ))}
+
+          {visibleConsumerProxies.map((proxy) => {
+            const style = consumerProxyStyleFor(proxy.reason)
+            return (
+              <MapMarker key={`consumer-${proxy.id}`} longitude={proxy.lon} latitude={proxy.lat}>
+                <MarkerContent>
+                  <ConsumerProxyMapMarker proxy={proxy} />
+                </MarkerContent>
+                <MarkerTooltip>
+                  <MarkerTip
+                    title={consumerProxyTitle(proxy)}
+                    rows={[
+                      ["Category", style.label],
+                      ["Reason", proxy.reason.replaceAll("_", " ")],
+                      ["Type", proxy.proxy_type.replaceAll("_", " ")],
+                      ["Sector", proxy.sector.replaceAll("_", " ")],
+                      ["Weight", formatNumber(proxy.weight, 1)],
+                      ["Confidence", proxy.confidence === null ? "n/a" : formatNumber(proxy.confidence, 2)],
+                    ]}
+                  />
+                </MarkerTooltip>
+              </MapMarker>
+            )
+          })}
         </Map>
 
         <MapLegend mode={mode} />
@@ -1222,6 +1327,11 @@ function App() {
             <Badge variant="outline" className="rounded-[3px] border-zinc-300 bg-white/75 px-2 py-1">
               {formatNumber(routeLayers.length)} map lines
             </Badge>
+            {showConsumerProxies && (
+              <Badge variant="outline" className="rounded-[3px] border-zinc-300 bg-white/75 px-2 py-1">
+                {formatNumber(visibleConsumerProxies.length)} consumers
+              </Badge>
+            )}
             <Badge variant="outline" className="rounded-[3px] border-zinc-300 bg-white/75 px-2 py-1">
               polling {POLL_MS / 1000}s
             </Badge>
@@ -1246,6 +1356,20 @@ function App() {
                 </button>
               )
             })}
+            <button
+              type="button"
+              onClick={() => setShowConsumerProxies((value) => !value)}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-[4px] border px-2.5 py-1.5 text-xs font-medium transition active:scale-[0.98]",
+                showConsumerProxies
+                  ? "border-violet-800 bg-violet-800 text-white"
+                  : "border-zinc-300 bg-white/85 text-zinc-700 hover:bg-white",
+              )}
+              aria-pressed={showConsumerProxies}
+            >
+              <Building2 className="size-3.5" />
+              {showConsumerProxies ? `Consumers ${formatNumber(visibleConsumerProxies.length)}` : "Consumers"}
+            </button>
           </div>
         </header>
 
