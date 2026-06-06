@@ -7,6 +7,7 @@ from typing import Any
 
 from app.assumptions.lines import branch_parameter_defaults, line_lookup_voltage_metadata
 from app.assumptions.demand_profiles import hourly_load_metadata, hourly_profile_summary
+from app.assumptions.generators import equivalent_generator_defaults, generator_defaults, generator_lookup_metadata
 from app.assumptions.transformers import transformer_lookup_metadata, transformer_parameter_defaults
 from app.data_sources import CalibrationBundle, load_calibration_bundle
 
@@ -70,20 +71,6 @@ HK_ELECTRIC_DISTRICT_CENTROIDS = {
     "lamma": (22.206, 114.126),
 }
 
-GENERATOR_FUEL_DEFAULTS = {
-    "coal": {"cost": [0.012, 26.0, 0.0], "cost_class": "thermal_coal", "pmin_fraction": 0.0, "power_factor": 0.86},
-    "gas": {"cost": [0.01, 22.0, 0.0], "cost_class": "thermal_gas", "pmin_fraction": 0.0, "power_factor": 0.86},
-    "nuclear": {"cost": [0.004, 12.0, 0.0], "cost_class": "low_variable_cost_import_or_nuclear", "pmin_fraction": 0.0, "power_factor": 0.9},
-    "solar": {"cost": [0.0, 2.0, 0.0], "cost_class": "low_variable_cost_renewable", "pmin_fraction": 0.0, "power_factor": 0.95},
-    "wind": {"cost": [0.0, 2.0, 0.0], "cost_class": "low_variable_cost_renewable", "pmin_fraction": 0.0, "power_factor": 0.95},
-    "waste": {"cost": [0.006, 18.0, 0.0], "cost_class": "waste_to_energy", "pmin_fraction": 0.0, "power_factor": 0.86},
-    "unknown": {"cost": [0.01, 24.0, 0.0], "cost_class": "generic_dispatchable", "pmin_fraction": 0.0, "power_factor": 0.86},
-}
-EQUIVALENT_GENERATOR_DEFAULTS = {
-    "clp": {"cost": [0.01, 20.0, 0.0], "cost_class": "territory_equivalent_import_or_local_supply", "pmin_fraction": 0.0, "power_factor": 0.86},
-    "hk-electric": {"cost": [0.01, 24.0, 0.0], "cost_class": "island_local_supply_equivalent", "pmin_fraction": 0.0, "power_factor": 0.86},
-    "default": {"cost": [0.01, 30.0, 0.0], "cost_class": "generic_capacity_equivalent", "pmin_fraction": 0.0, "power_factor": 0.86},
-}
 FACILITY_FOOTPRINT_RADIUS_MIN_KM = 0.02
 FACILITY_FOOTPRINT_RADIUS_MAX_KM = 0.25
 POINT_FACILITY_BUFFER_KM = 0.15
@@ -1034,6 +1021,18 @@ def topology_preview_to_powermodels(
             "energy_source": generator.get("energy_source"),
             "resource_type": generator.get("resource_type"),
             "cost_class": generator.get("cost_class"),
+            "variable_cost_usd_per_mwh": generator.get("variable_cost_usd_per_mwh"),
+            "startup_cost_usd": generator.get("startup_cost_usd"),
+            "availability_factor": generator.get("availability_factor"),
+            "forced_outage_rate": generator.get("forced_outage_rate"),
+            "co2_t_per_mwh": generator.get("co2_t_per_mwh"),
+            "ramp_rate_mw_per_min": generator.get("ramp_rate_mw_per_min"),
+            "dispatch_priority": generator.get("dispatch_priority"),
+            "synthetic_cost_provenance": generator.get("synthetic_cost_provenance"),
+            "cost_confidence": generator.get("cost_confidence"),
+            "cost_method": generator.get("cost_method"),
+            "cost_source": generator.get("cost_source"),
+            "cost_assumptions": generator.get("cost_assumptions"),
             "capacity_tag": generator.get("capacity_tag"),
             "capacity_raw": generator.get("capacity_raw"),
             "connection_method": generator.get("connection_method"),
@@ -3008,7 +3007,7 @@ def _tagged_generators(
             continue
         if float(pmax_mw) < min_solver_generator_mw:
             continue
-        fuel_defaults = GENERATOR_FUEL_DEFAULTS[_normal_generator_source(generator.get("source"))]
+        fuel_defaults = generator_defaults(_normal_generator_source(generator.get("source")))
         tagged.append(
             {
                 "id": generator["id"],
@@ -3024,7 +3023,7 @@ def _tagged_generators(
                 "cost_class": fuel_defaults["cost_class"],
                 "cost": list(fuel_defaults["cost"]),
                 "pmin_fraction": fuel_defaults["pmin_fraction"],
-                "power_factor": fuel_defaults["power_factor"],
+                **_generator_assumption_metadata(fuel_defaults),
                 "provenance": generator.get("provenance"),
                 "provenance_chain": generator.get("provenance_chain"),
                 "confidence": generator.get("confidence"),
@@ -3037,7 +3036,7 @@ def _tagged_generators(
 
 
 def _generator_cost(source: Any) -> list[float]:
-    return list(GENERATOR_FUEL_DEFAULTS[_normal_generator_source(source)]["cost"])
+    return list(generator_defaults(_normal_generator_source(source))["cost"])
 
 
 def _normal_generator_source(source: Any) -> str:
@@ -3049,7 +3048,7 @@ def _normal_generator_source(source: Any) -> str:
 
 
 def _generator_cost_class(source: Any) -> str:
-    return str(GENERATOR_FUEL_DEFAULTS[_normal_generator_source(source)]["cost_class"])
+    return str(generator_defaults(_normal_generator_source(source))["cost_class"])
 
 
 def _equivalent_generator_cost_class(territory: str) -> str:
@@ -3057,7 +3056,24 @@ def _equivalent_generator_cost_class(territory: str) -> str:
 
 
 def _equivalent_generator_defaults(territory: str) -> Mapping[str, Any]:
-    return EQUIVALENT_GENERATOR_DEFAULTS.get(territory, EQUIVALENT_GENERATOR_DEFAULTS["default"])
+    return equivalent_generator_defaults(territory)
+
+
+def _generator_assumption_metadata(defaults: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "variable_cost_usd_per_mwh": defaults.get("variable_cost_usd_per_mwh"),
+        "startup_cost_usd": defaults.get("startup_cost_usd"),
+        "availability_factor": defaults.get("availability_factor"),
+        "forced_outage_rate": defaults.get("forced_outage_rate"),
+        "co2_t_per_mwh": defaults.get("co2_t_per_mwh"),
+        "ramp_rate_mw_per_min": defaults.get("ramp_rate_mw_per_min"),
+        "dispatch_priority": defaults.get("dispatch_priority"),
+        "synthetic_cost_provenance": defaults.get("synthetic_cost_provenance"),
+        "cost_confidence": defaults.get("cost_confidence"),
+        "cost_method": defaults.get("cost_method"),
+        "cost_source": defaults.get("cost_source"),
+        "cost_assumptions": defaults.get("cost_assumptions"),
+    }
 
 
 def _equivalent_generators(
@@ -3102,7 +3118,7 @@ def _equivalent_generators(
                 "cost_class": defaults["cost_class"],
                 "cost": list(defaults["cost"]),
                 "pmin_fraction": defaults["pmin_fraction"],
-                "power_factor": defaults["power_factor"],
+                **_generator_assumption_metadata(defaults),
                 "provenance": "public_peak_demand_capacity_equivalent",
                 "confidence": 0.35,
             }
@@ -3110,7 +3126,7 @@ def _equivalent_generators(
 
     if not generators and buses:
         bus = max(buses, key=lambda candidate: candidate.get("base_kv") or 0.0)
-        defaults = EQUIVALENT_GENERATOR_DEFAULTS["default"]
+        defaults = equivalent_generator_defaults("default")
         generators.append(
             {
                 "id": "equivalent_gen:unassigned",
@@ -3122,7 +3138,7 @@ def _equivalent_generators(
                 "cost_class": defaults["cost_class"],
                 "cost": list(defaults["cost"]),
                 "pmin_fraction": defaults["pmin_fraction"],
-                "power_factor": defaults["power_factor"],
+                **_generator_assumption_metadata(defaults),
                 "provenance": "fallback_capacity_equivalent",
                 "confidence": 0.2,
             }
@@ -3864,8 +3880,7 @@ def _parameter_lookup_metadata() -> dict[str, Any]:
         **line_lookup_voltage_metadata(),
         **transformer_lookup_metadata(),
         "hourly_demand_profiles": hourly_profile_summary(),
-        "generator_fuel_defaults": sorted(GENERATOR_FUEL_DEFAULTS),
-        "equivalent_generator_defaults": sorted(EQUIVALENT_GENERATOR_DEFAULTS),
+        **generator_lookup_metadata(),
         "load_power_factor": LOAD_DEFAULTS["power_factor"],
         "baseMVA": BASE_MVA,
     }

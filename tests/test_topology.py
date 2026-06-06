@@ -828,7 +828,12 @@ def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
     assert tagged_export["energy_source"] == "gas"
     assert tagged_export["resource_type"] == "local_osm_generator"
     assert tagged_export["cost_class"] == "thermal_gas"
-    assert tagged_export["pmin"] == 0.0
+    assert tagged_export["cost"] == [0.0, 22.0, 0.0]
+    assert tagged_export["availability_factor"] == 0.9
+    assert tagged_export["forced_outage_rate"] == 0.06
+    assert tagged_export["co2_t_per_mwh"] == 0.4
+    assert tagged_export["synthetic_cost_provenance"] == "synthetic_engineering_default"
+    assert tagged_export["pmin"] == 0.8
 
 
 def test_powermodels_preview_prunes_disconnected_no_load_generation_island() -> None:
