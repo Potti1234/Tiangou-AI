@@ -128,10 +128,24 @@ def _handoff_artifact_summary() -> dict[str, Any]:
     exists = {name: Path(path).exists() for name, path in HANDOFF_ARTIFACT_PATHS.items()}
     present_count = sum(1 for value in exists.values() if value)
     status = "complete" if present_count == len(exists) else "warning" if present_count else "not_run"
+    manifest_path = Path("data/processed/hong_kong_phase1_manifest.json")
+    manifest: dict[str, Any] | None = None
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            manifest = {"status": "error", "error": "Manifest exists but could not be parsed as JSON."}
     return {
         "status": status,
         "paths": HANDOFF_ARTIFACT_PATHS,
         "exists": exists,
+        "manifest_path": str(manifest_path),
+        "manifest_exists": manifest_path.exists(),
+        "manifest": manifest,
+        "feasibility_warning": (
+            "The refreshed 57-bus/63-branch case can export raw PowerModels, but the Julia AC relaxation may fail "
+            "after DC warm-start because the synthetic/demo grid is not yet AC-feasible."
+        ),
     }
 
 
@@ -250,6 +264,17 @@ def _pipeline_summary_payload(
         },
         "handoff_artifacts": handoff_artifacts["paths"],
         "handoff_artifact_exists": handoff_artifacts["exists"],
+        "handoff_artifact_status": {
+            "status": handoff_artifacts["status"],
+            "raw_powermodels_export_generated": handoff_artifacts["exists"]["raw_json"],
+            "gridsfm_relaxed_solvable_json_generated": handoff_artifacts["exists"]["solvable_json"],
+            "pyg_export_generated": handoff_artifacts["exists"]["pyg_json"],
+            "scenario_files_generated": handoff_artifacts["exists"]["scenarios"],
+            "manifest_path": handoff_artifacts["manifest_path"],
+            "manifest_exists": handoff_artifacts["manifest_exists"],
+            "manifest_export_count": len(handoff_artifacts["manifest"].get("exports", [])) if isinstance(handoff_artifacts.get("manifest"), dict) else 0,
+            "feasibility_warning": handoff_artifacts["feasibility_warning"],
+        },
     }
 
 
@@ -322,6 +347,239 @@ def _build_dashboard_snapshot(params: DashboardSnapshotParams) -> dict[str, Any]
             oldest_key = next(iter(_DASHBOARD_CACHE))
             _DASHBOARD_CACHE.pop(oldest_key, None)
     return snapshot
+
+
+def _chart_rows_from_counts(counts: dict[str, int | float], *, value_key: str = "value") -> list[dict[str, Any]]:
+    return [
+        {"label": label.replace("_", " "), "key": label, value_key: value}
+        for label, value in sorted(counts.items(), key=lambda item: (-float(item[1]), item[0]))
+    ]
+
+
+def _provenance_class(value: str | None) -> str:
+    if not value:
+        return "unknown"
+    if value.startswith("observed"):
+        return "observed_public"
+    if value.startswith("inferred"):
+        return "inferred_from_public_statistics"
+    if value.startswith("synthetic"):
+        return "synthetic_engineering_default"
+    if "synthetic" in value:
+        return "synthetic_engineering_default"
+    if "public" in value:
+        return "observed_public"
+    return "inferred_from_public_statistics"
+
+
+def _add_count(counter: dict[str, int], key: Any) -> None:
+    label = str(key or "unknown")
+    counter[label] = counter.get(label, 0) + 1
+
+
+def _add_float(counter: dict[str, float], key: Any, value: float) -> None:
+    label = str(key or "unknown")
+    counter[label] = round(counter.get(label, 0.0) + value, 6)
+
+
+def _assumption_tables_payload() -> list[dict[str, Any]]:
+    return (
+        line_assumption_tables()
+        + transformer_assumption_tables()
+        + data_center_assumption_tables()
+        + demand_profile_assumption_tables()
+        + generator_assumption_tables()
+        + contingency_assumption_tables()
+        + import_assumption_tables()
+    )
+
+
+def _low_confidence_assumption_counts(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    examples: dict[str, dict[str, Any]] = {}
+    for table in tables:
+        category = str(table.get("category") or table.get("key") or "unknown")
+        for row in table.get("rows", []):
+            try:
+                confidence = float(row.get("confidence", 1.0))
+            except (TypeError, ValueError):
+                continue
+            if confidence >= 0.6:
+                continue
+            counts[category] = counts.get(category, 0) + 1
+            examples.setdefault(
+                category,
+                {
+                    "table": table.get("key"),
+                    "confidence": confidence,
+                    "assumption": row.get("assumptions") or row.get("method") or row.get("source") or "Low-confidence assumption",
+                },
+            )
+    return [
+        {"category": category, "count": count, "example": examples.get(category)}
+        for category, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def _important_proxy_markers_for_analytics(region_key: str, limit: int = 500) -> list[dict[str, Any]]:
+    with get_db() as conn:
+        rows = list_important_consumer_proxy_marker_rows(
+            conn,
+            region_key=region_key,
+            category_limits=_important_consumer_proxy_category_limits(limit),
+        )
+
+    markers: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        proxy = dict(row)
+        marker_id = f"{proxy['osm_type']}:{proxy['osm_id']}:{proxy['proxy_type']}"
+        if marker_id in seen:
+            continue
+        seen.add(marker_id)
+        reason = proxy["reason"]
+        if reason == "transport":
+            reason = "airport" if proxy["proxy_type"] == "aerodrome" else proxy["proxy_type"]
+        marker = {
+            "id": marker_id,
+            "name": proxy["name"],
+            "category": reason,
+            "proxy_type": proxy["proxy_type"],
+            "sector": proxy["sector"],
+            "weight": proxy["weight"],
+            "confidence": proxy["confidence"],
+        }
+        if reason == "data_center":
+            estimate_input = dict(proxy)
+            tags_json = estimate_input.pop("tags_json", None)
+            estimate_input["tags"] = json.loads(tags_json) if tags_json else {}
+            marker["data_center_load_estimate"] = estimate_data_center_load(estimate_input)
+        markers.append(marker)
+        if len(markers) >= limit:
+            break
+    return markers
+
+
+def _analytics_from_snapshot(
+    *,
+    snapshot: dict[str, Any],
+    demand_snapshots: list[dict[str, Any]],
+    assumption_summary: dict[str, Any],
+    assumption_tables: list[dict[str, Any]],
+    consumer_proxy_markers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    case = snapshot["powermodels_case"]
+    summary = snapshot["summary"]
+    validation = snapshot["validation"]
+    baseline = snapshot["baseline_weak_spots"]
+    metadata = case.get("_metadata", {})
+    loads = case.get("load", {})
+    generators = case.get("gen", {})
+    branches = case.get("branch", {})
+    buses = case.get("bus", {})
+
+    load_by_sector: dict[str, float] = {}
+    load_by_provenance: dict[str, float] = {}
+    for load in loads.values():
+        mw = round(float(load.get("pd") or 0.0) * 100.0, 6)
+        _add_float(load_by_sector, load.get("sector") or load.get("service_territory") or "aggregate", mw)
+        _add_float(load_by_provenance, _provenance_class(load.get("provenance")), mw)
+
+    gen_capacity: dict[tuple[str, str], float] = {}
+    for gen in generators.values():
+        source = str(gen.get("energy_source") or "unknown")
+        resource_type = str(gen.get("resource_type") or "unknown")
+        key = (source, resource_type)
+        gen_capacity[key] = round(gen_capacity.get(key, 0.0) + float(gen.get("pmax") or 0.0) * 100.0, 6)
+
+    branch_by_voltage: dict[str, dict[str, Any]] = {}
+    for branch in branches.values():
+        voltage = branch.get("matched_voltage_kv")
+        voltage_label = f"{int(voltage)} kV" if isinstance(voltage, int | float) else "unknown"
+        row = branch_by_voltage.setdefault(voltage_label, {"voltage_level": voltage_label, "branch_count": 0, "thermal_rating_mva": 0.0})
+        row["branch_count"] += 1
+        row["thermal_rating_mva"] = round(row["thermal_rating_mva"] + float(branch.get("rate_a") or 0.0), 6)
+
+    branch_provenance: dict[str, int] = {}
+    bus_provenance: dict[str, int] = {}
+    for branch in branches.values():
+        _add_count(branch_provenance, branch.get("provenance"))
+    for bus in buses.values():
+        _add_count(bus_provenance, bus.get("provenance"))
+
+    proxy_counts: dict[str, int] = {}
+    data_center_sites: list[dict[str, Any]] = []
+    for marker in consumer_proxy_markers:
+        _add_count(proxy_counts, marker.get("category"))
+        estimate = marker.get("data_center_load_estimate")
+        if isinstance(estimate, dict):
+            data_center_sites.append(
+                {
+                    "id": marker["id"],
+                    "name": marker.get("name") or marker["id"],
+                    "estimated_facility_mw": estimate.get("estimated_facility_mw", 0),
+                    "estimated_it_mw": estimate.get("estimated_it_mw", 0),
+                    "provenance": estimate.get("provenance"),
+                    "confidence": estimate.get("confidence"),
+                }
+            )
+
+    baseline_system = baseline["system_summary"]
+    reserve_margin = baseline_system.get("reserve_margin_estimate")
+    return {
+        "schema": "tiangou.grid.analytics_dashboard.v1",
+        "region_key": summary["region_key"],
+        "metadata_cards": {
+            "buses": validation["metrics"]["bus_count"],
+            "branches": validation["metrics"]["branch_count"],
+            "loads": validation["metrics"]["load_count"],
+            "generators": validation["metrics"]["gen_count"],
+            "total_demand_mw": validation["metrics"]["total_pd_mw"],
+            "total_pmax_mw": validation["metrics"]["total_pmax_mw"],
+            "reserve_margin": reserve_margin,
+            "island_count": validation["metrics"]["island_count"],
+            "synthetic_branch_share": baseline_system["synthetic_branch_share"],
+            "severe_voltage_mismatch_count": validation["metrics"]["severe_branch_voltage_mismatch_count"],
+            "observed_inferred_synthetic_row_counts": assumption_summary["provenance_counts"],
+        },
+        "charts": {
+            "load_by_sector": _chart_rows_from_counts(load_by_sector, value_key="mw"),
+            "load_by_provenance_class": _chart_rows_from_counts(load_by_provenance, value_key="mw"),
+            "generation_capacity_by_source": [
+                {"energy_source": source, "resource_type": resource_type, "pmax_mw": value}
+                for (source, resource_type), value in sorted(gen_capacity.items(), key=lambda item: (-item[1], item[0][0], item[0][1]))
+            ],
+            "branch_by_voltage_level": sorted(branch_by_voltage.values(), key=lambda row: (row["voltage_level"] == "unknown", row["voltage_level"])),
+            "branch_provenance_counts": _chart_rows_from_counts(branch_provenance, value_key="count"),
+            "bus_provenance_counts": _chart_rows_from_counts(bus_provenance, value_key="count"),
+            "weak_spot_risk_top_branches": baseline_system["top_10_risky_branches"][:10],
+            "weak_spot_risk_top_buses": baseline_system["top_10_risky_buses"][:10],
+            "low_confidence_assumption_counts": _low_confidence_assumption_counts(assumption_tables)[:20],
+            "consumer_proxy_counts_by_category": _chart_rows_from_counts(proxy_counts, value_key="count"),
+            "data_center_estimated_mw_top_sites": sorted(data_center_sites, key=lambda item: -float(item["estimated_facility_mw"]))[:10],
+            "demand_snapshots": demand_snapshots,
+        },
+        "transparency": {
+            "provenance_classes": {
+                "observed_public": "Observed from public source tables or public OSM tags.",
+                "inferred_from_public_statistics": "Inferred from public statistics, geography, or allocation rules.",
+                "synthetic_engineering_default": "Explainable engineering default, not utility-confirmed equipment data.",
+            },
+            "assumption_summary": assumption_summary,
+            "lowest_confidence_assumptions": _low_confidence_assumption_counts(assumption_tables)[:10],
+            "synthetic_note": "Synthetic values are explainable defaults, not utility-confirmed equipment data.",
+        },
+        "solver_artifacts": summary["handoff_artifact_status"],
+        "source_summary": {
+            "dashboard_snapshot": "/grid/dashboard-snapshot",
+            "powermodels_case": "powermodels_case",
+            "baseline_weak_spots": "baseline_weak_spots",
+            "validation_metrics": "validation.metrics",
+            "assumptions": "/assumptions/*",
+            "consumer_proxy_markers": "/grid/consumer-proxies/important",
+            "demand_snapshot": metadata.get("demand_snapshot"),
+        },
+    }
 
 
 def _important_proxy_reason(proxy: dict[str, Any]) -> str | None:
@@ -856,6 +1114,73 @@ def dashboard_snapshot(
             include_synthetic_generator_connections=include_synthetic_generator_connections,
             asset_limit=asset_limit,
         )
+    )
+
+
+@app.get("/grid/analytics-dashboard")
+def analytics_dashboard(
+    region_key: str = "hong-kong",
+    snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
+    demand_snapshot: str = Query(default="peak_16h", pattern=DEMAND_SNAPSHOT_PATTERN),
+    include_hk_interties: bool = False,
+    hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
+    min_voltage_kv: float | None = Query(default=100.0, gt=0.0),
+    solver_include_policy: str = Query(default=DEFAULT_SOLVER_INCLUDE_POLICY, pattern=SOLVER_INCLUDE_POLICY_PATTERN),
+    min_solver_generator_mw: float = Query(default=DEFAULT_MIN_SOLVER_GENERATOR_MW, ge=0.0),
+    include_synthetic_generator_connections: bool = True,
+) -> dict[str, Any]:
+    try:
+        get_region(region_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    base_params = DashboardSnapshotParams(
+        region_key=region_key,
+        snap_tolerance_km=snap_tolerance_km,
+        demand_snapshot=demand_snapshot,
+        include_hk_interties=include_hk_interties,
+        hk_intertie_derate=hk_intertie_derate,
+        min_voltage_kv=min_voltage_kv,
+        solver_include_policy=solver_include_policy,
+        min_solver_generator_mw=min_solver_generator_mw,
+        include_synthetic_generator_connections=include_synthetic_generator_connections,
+        asset_limit=1,
+    )
+    snapshot = _build_dashboard_snapshot(base_params)
+
+    demand_snapshot_keys = [key for key in ("peak_16h", "overnight_04h") if key in DEMAND_SNAPSHOTS]
+    if demand_snapshot not in demand_snapshot_keys:
+        demand_snapshot_keys.insert(0, demand_snapshot)
+    demand_snapshots: list[dict[str, Any]] = []
+    for snapshot_key in demand_snapshot_keys:
+        snapshot_payload = _build_dashboard_snapshot(
+            DashboardSnapshotParams(
+                **{**base_params.__dict__, "demand_snapshot": snapshot_key}
+            )
+        )
+        metrics = snapshot_payload["validation"]["metrics"]
+        demand_snapshots.append(
+            {
+                "snapshot": snapshot_key,
+                "total_demand_mw": metrics["total_pd_mw"],
+                "total_pmax_mw": metrics["total_pmax_mw"],
+                "reserve_margin": (
+                    round((metrics["total_pmax_mw"] - metrics["total_pd_mw"]) / metrics["total_pd_mw"], 6)
+                    if metrics["total_pd_mw"] > 0
+                    else None
+                ),
+            }
+        )
+
+    assumption_summary = build_assumption_validation_summary()
+    assumption_tables = _assumption_tables_payload()
+    consumer_proxy_markers = _important_proxy_markers_for_analytics(region_key, limit=500)
+    return _analytics_from_snapshot(
+        snapshot=snapshot,
+        demand_snapshots=demand_snapshots,
+        assumption_summary=assumption_summary,
+        assumption_tables=assumption_tables,
+        consumer_proxy_markers=consumer_proxy_markers,
     )
 
 

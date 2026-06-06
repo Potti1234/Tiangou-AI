@@ -144,6 +144,10 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
             "/studies/baseline-weak-spots",
             params={"include_hk_interties": True, "min_voltage_kv": 100.0},
         )
+        analytics_response = client.get(
+            "/grid/analytics-dashboard",
+            params={"include_hk_interties": True, "min_voltage_kv": 100.0},
+        )
 
     assert ingest_response.status_code == 200
     assert dashboard_response.status_code == 200
@@ -162,6 +166,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert calibration_response.status_code == 200
     assert summary_response.status_code == 200
     assert baseline_response.status_code == 200
+    assert analytics_response.status_code == 200
     payload = preview_response.json()
     assert payload["baseMVA"] == 100.0
     assert demo_policy_response.json()["_metadata"]["solver_include_policy"] == "demo_full_osm"
@@ -239,6 +244,33 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert baseline_payload["system_summary"]["top_10_risky_buses"][0]["reasons"]
     assert summary_payload["handoff_artifacts"]["pyg_json"].endswith(".pyg.json")
     assert set(summary_payload["handoff_artifact_exists"]) == {"raw_json", "solvable_json", "pyg_json", "scenarios"}
+    analytics_payload = analytics_response.json()
+    assert analytics_payload["schema"] == "tiangou.grid.analytics_dashboard.v1"
+    assert set(analytics_payload["metadata_cards"]) >= {
+        "buses",
+        "branches",
+        "loads",
+        "generators",
+        "total_demand_mw",
+        "total_pmax_mw",
+        "reserve_margin",
+        "island_count",
+        "synthetic_branch_share",
+        "severe_voltage_mismatch_count",
+        "observed_inferred_synthetic_row_counts",
+    }
+    assert analytics_payload["metadata_cards"]["buses"] == validation_payload["metrics"]["bus_count"]
+    assert analytics_payload["charts"]["load_by_sector"]
+    assert analytics_payload["charts"]["load_by_provenance_class"]
+    assert analytics_payload["charts"]["generation_capacity_by_source"]
+    assert analytics_payload["charts"]["branch_by_voltage_level"]
+    assert len(analytics_payload["charts"]["weak_spot_risk_top_branches"]) <= 10
+    assert len(analytics_payload["charts"]["weak_spot_risk_top_buses"]) <= 10
+    assert len(analytics_payload["charts"]["low_confidence_assumption_counts"]) <= 20
+    assert {"peak_16h", "overnight_04h"} <= {row["snapshot"] for row in analytics_payload["charts"]["demand_snapshots"]}
+    assert analytics_payload["transparency"]["assumption_summary"]["provenance_counts"] == analytics_payload["metadata_cards"]["observed_inferred_synthetic_row_counts"]
+    assert analytics_payload["solver_artifacts"]["raw_powermodels_export_generated"] in {True, False}
+    assert "57-bus/63-branch case can export raw PowerModels" in analytics_payload["solver_artifacts"]["feasibility_warning"]
 
 
 def test_consumer_proxy_ingest_endpoint_stores_normalized_rows(tmp_path, monkeypatch) -> None:
