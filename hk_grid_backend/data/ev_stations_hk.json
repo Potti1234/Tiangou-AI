@@ -1,0 +1,5 @@
+{
+  "source": "data.gov.hk CLP EV Charging Dataset (proxy)",
+  "note": "Loaded at runtime from config/hk_grid.py EV_CHARGING_STATIONS. Replace this file with actual CLP dataset export for production.",
+  "stations": []
+}
