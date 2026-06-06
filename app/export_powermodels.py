@@ -5,7 +5,8 @@ from typing import Any
 
 from app.database import connect
 from app.gridsfm_solver_config import DEFAULT_GRIDSFM_SOLVER_DIR, REQUIRED_SOLVER_SCRIPTS
-from app.repository import list_elements
+from app.load_proxies import rows_to_consumer_proxies
+from app.repository import list_consumer_proxy_elements, list_elements
 from app.topology import DEMAND_SNAPSHOTS, build_powermodels_preview, validate_powermodels_case
 
 
@@ -35,6 +36,7 @@ def export_powermodels_case(
 ) -> dict[str, Any]:
     with connect(database_path) as conn:
         rows = list_elements(conn, region_key=region_key, limit=100000)
+        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
 
     case = build_powermodels_preview(
         rows,
@@ -43,6 +45,7 @@ def export_powermodels_case(
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
+        consumer_proxies=rows_to_consumer_proxies(proxy_rows),
     )
     validation = validate_powermodels_case(case)
     if validation["status"] == "error" and not allow_validation_errors:

@@ -49,10 +49,29 @@ CREATE TABLE IF NOT EXISTS element_regions (
     FOREIGN KEY (ingest_run_id) REFERENCES ingest_runs(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS consumer_proxy_elements (
+    osm_type TEXT NOT NULL,
+    osm_id INTEGER NOT NULL,
+    region_key TEXT NOT NULL,
+    proxy_type TEXT NOT NULL,
+    sector TEXT NOT NULL,
+    weight REAL NOT NULL,
+    weight_method TEXT,
+    confidence REAL,
+    name TEXT,
+    tags_json TEXT NOT NULL,
+    geometry_json TEXT,
+    lat REAL,
+    lon REAL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (osm_type, osm_id, region_key, proxy_type)
+);
+
 CREATE INDEX IF NOT EXISTS idx_osm_elements_power ON osm_elements(power);
 CREATE INDEX IF NOT EXISTS idx_osm_elements_name ON osm_elements(name);
 CREATE INDEX IF NOT EXISTS idx_osm_elements_voltage ON osm_elements(voltage);
 CREATE INDEX IF NOT EXISTS idx_element_regions_region ON element_regions(region_key);
+CREATE INDEX IF NOT EXISTS idx_consumer_proxy_region_sector ON consumer_proxy_elements(region_key, sector);
 """
 
 

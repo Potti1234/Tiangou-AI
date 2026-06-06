@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import Any
 
 from app.database import connect
-from app.repository import list_elements
+from app.load_proxies import rows_to_consumer_proxies
+from app.repository import list_consumer_proxy_elements, list_elements
 from app.topology import DEMAND_SNAPSHOTS, build_topology_preview
 
 
@@ -24,6 +25,7 @@ def export_hk_electric_load_allocation(
 ) -> dict[str, Any]:
     with connect(database_path) as conn:
         rows = list_elements(conn, region_key=region_key, limit=100000)
+        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
 
     topology = build_topology_preview(
         rows,
@@ -32,6 +34,7 @@ def export_hk_electric_load_allocation(
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
+        consumer_proxies=rows_to_consumer_proxies(proxy_rows),
     )
     loads = list(topology["loads"])
     missing_provenance = [load["id"] for load in loads if not load.get("provenance")]
@@ -49,6 +52,7 @@ def export_hk_electric_load_allocation(
             "service_territories": sorted({str(load.get("service_territory")) for load in loads if load.get("service_territory")}),
             "total_pd_mw": round(sum(float(load.get("pd_mw") or 0.0) for load in loads), 3),
             "total_source_energy_gwh": round(sum(float(load.get("source_energy_gwh") or 0.0) for load in loads), 3),
+            "load_allocation_validation": topology["metadata"].get("load_allocation_validation"),
         },
         "loads": loads,
     }

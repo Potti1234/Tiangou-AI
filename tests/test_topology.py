@@ -103,11 +103,12 @@ def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
         "industrial",
         "transport_or_public_services",
     }
-    assert {load["provenance"] for load in clp_loads} == {"inferred_clp_from_hk_total_minus_hk_electric"}
-    assert {load["allocation_method"] for load in clp_loads} == {"inferred_clp_voltage_weighted_substation_split"}
+    assert {load["provenance"] for load in clp_loads} == {"inferred_clp_substation_allocated"}
+    assert {load["allocation_method"] for load in clp_loads} == {"inferred_clp_substation_allocated"}
     clp_by_bus_sector = {(load["bus_id"], load["sector"]): load for load in clp_loads}
     assert clp_by_bus_sector[("osm:node:1", "residential")]["source_energy_gwh"] == 5947.234
     assert clp_by_bus_sector[("osm:node:1", "residential")]["pd_mw"] == 1327.642
+    assert preview["metadata"]["load_allocation_validation"]["proxy_allocation_share"] == 0.0
 
 
 def test_topology_uses_synthetic_clp_only_when_public_total_is_missing(tmp_path, monkeypatch) -> None:
@@ -134,6 +135,53 @@ def test_topology_uses_synthetic_clp_only_when_public_total_is_missing(tmp_path,
     assert clp_loads
     assert {load["provenance"] for load in clp_loads} == {"synthetic_missing_clp_data"}
     assert {load["allocation_method"] for load in clp_loads} == {"synthetic_missing_clp_voltage_weighted_substation_split"}
+
+
+def test_proxy_load_allocation_preserves_sector_totals_and_provenance() -> None:
+    proxies = [
+        {
+            "osm_type": "way",
+            "osm_id": 500,
+            "region_key": "hong-kong",
+            "proxy_type": "building",
+            "sector": "residential",
+            "weight": 1000.0,
+            "confidence": 0.8,
+            "lat": 22.3005,
+            "lon": 114.1005,
+        },
+        {
+            "osm_type": "way",
+            "osm_id": 501,
+            "region_key": "hong-kong",
+            "proxy_type": "building",
+            "sector": "residential",
+            "weight": 500.0,
+            "confidence": 0.7,
+            "lat": 22.3105,
+            "lon": 114.1105,
+        },
+    ]
+
+    preview = build_topology_preview(_sample_rows(), snap_tolerance_km=0.2, consumer_proxies=proxies)
+
+    clp_residential = [
+        load
+        for load in preview["loads"]
+        if load["service_territory"] == "clp" and load.get("sector") == "residential"
+    ]
+    assert {load["provenance"] for load in clp_residential} == {"inferred_clp_proxy_allocated"}
+    assert round(sum(load["source_energy_gwh"] for load in clp_residential), 3) == 9912.056
+    assert round(sum(load["pd_mw"] for load in preview["loads"]), 3) == 9492.178
+    assert preview["metadata"]["demand_allocation_method"] == "proxy_weighted_bus_sector_allocation"
+    allocation = preview["metadata"]["load_allocation_validation"]
+    assert allocation["proxy_count_by_sector"] == {"residential": 2}
+    assert allocation["proxy_allocation_share"] > 0
+    assert allocation["average_proxy_to_bus_distance_km"] is not None
+    assert allocation["median_proxy_to_bus_distance_km"] is not None
+    assert allocation["top_buses_by_allocated_demand"]
+    assert allocation["top_sectors_by_allocated_demand"]
+    assert "proxy_assignment_distance_avg_km" in clp_residential[0]
 
 
 def test_topology_preview_snaps_to_facility_footprint_buffer() -> None:
@@ -472,15 +520,15 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert case["_metadata"]["calibration"]["snapshot_total_mw"]["peak_16h"] == 2106.448
     assert case["_metadata"]["calibration"]["clp_snapshot_total_mw"]["peak_16h"] == 7385.731
     assert {load["provenance"] for load in case["load"].values()} == {
-        "observed_hk_electric_public_consumption",
-        "inferred_clp_from_hk_total_minus_hk_electric",
+        "observed_hk_electric_substation_allocated",
+        "inferred_clp_substation_allocated",
     }
     assert all(load["allocation_method"] for load in case["load"].values())
     assert case["_metadata"]["provenance_summary"]["branch"] == {"osm_with_inferred_parameters": 1}
     assert case["_metadata"]["provenance_summary"]["gen"] == {"public_peak_demand_capacity_equivalent": 2}
     assert case["_metadata"]["provenance_summary"]["load"] == {
-        "observed_hk_electric_public_consumption": 15,
-        "inferred_clp_from_hk_total_minus_hk_electric": 8,
+        "observed_hk_electric_substation_allocated": 15,
+        "inferred_clp_substation_allocated": 8,
     }
     assert sum(load["pd"] for load in case["load"].values()) == 94.92178
     assert sum(gen["pmax"] for gen in case["gen"].values()) > 94.92178
@@ -1057,8 +1105,8 @@ def test_powermodels_validation_reports_islands_and_capacity() -> None:
     assert validation["metrics"]["branch_voltage_mismatch_count"] == 0
     assert validation["metrics"]["severe_branch_voltage_mismatch_count"] == 0
     assert validation["metrics"]["provenance_summary"]["load"] == {
-        "observed_hk_electric_public_consumption": 15,
-        "inferred_clp_from_hk_total_minus_hk_electric": 8,
+        "observed_hk_electric_substation_allocated": 15,
+        "inferred_clp_substation_allocated": 8,
     }
     assert validation["metrics"]["calibration"]["hk_electric_territory"]["status"] == "pass"
     assert validation["metrics"]["calibration"]["clp_inferred_sector"]["commercial"]["status"] == "pass"

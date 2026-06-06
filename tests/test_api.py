@@ -148,7 +148,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert payload["_metadata"]["load_count"] == 8
     assert payload["_metadata"]["gen_count"] == 1
     assert payload["_metadata"]["provenance_summary"]["load"] == {
-        "inferred_clp_from_hk_total_minus_hk_electric": 8
+        "inferred_clp_substation_allocated": 8
     }
     assert overnight_response.json()["_metadata"]["total_pd_mw"] == 3286.639
     assert cooling_response.json()["_metadata"]["total_pd_mw"] == 8772.81
@@ -183,11 +183,57 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert summary_payload["stage_status"]["handoff_artifacts"] in {"not_run", "warning", "complete"}
     assert summary_payload["raw_osm_counts_by_power"] == {"line": 1, "substation": 2}
     assert summary_payload["topology_metadata"]["min_voltage_kv"] == 100.0
+    assert set(summary_payload["topology_metadata"]["load_allocation_validation"]) >= {
+        "method",
+        "proxy_allocation_share",
+        "fallback_allocation_share",
+        "proxy_count_by_sector",
+        "median_proxy_to_bus_distance_km",
+        "top_buses_by_allocated_demand",
+        "top_sectors_by_allocated_demand",
+        "warnings",
+    }
     assert summary_payload["solver_metadata"]["branch_count"] == 1
     assert summary_payload["asset_reconciliation"]["summary"]["raw_linear_count"] == 1
     assert summary_payload["validation"]["metrics"]["island_count"] == 1
     assert summary_payload["handoff_artifacts"]["pyg_json"].endswith(".pyg.json")
     assert set(summary_payload["handoff_artifact_exists"]) == {"raw_json", "solvable_json", "pyg_json", "scenarios"}
+
+
+def test_consumer_proxy_ingest_endpoint_stores_normalized_rows(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", tmp_path / "api.sqlite3")
+
+    async def fake_fetch(self, query: str):
+        return {
+            "elements": [
+                {
+                    "type": "way",
+                    "id": 500,
+                    "center": {"lat": 22.30, "lon": 114.10},
+                    "tags": {"building": "apartments", "building:levels": "30", "name": "Mock Towers"},
+                    "geometry": [
+                        {"lat": 22.3000, "lon": 114.1000},
+                        {"lat": 22.3000, "lon": 114.1010},
+                        {"lat": 22.3010, "lon": 114.1010},
+                        {"lat": 22.3010, "lon": 114.1000},
+                    ],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(main.OverpassClient, "fetch", fake_fetch)
+
+    with TestClient(main.app) as client:
+        ingest_response = client.post("/ingest/hong-kong-consumer-proxies")
+        proxies_response = client.get("/grid/consumer-proxies", params={"region_key": "hong-kong"})
+
+    assert ingest_response.status_code == 200
+    assert ingest_response.json()["stored_count"] >= 1
+    assert proxies_response.status_code == 200
+    proxy = proxies_response.json()[0]
+    assert proxy["sector"] == "residential"
+    assert proxy["proxy_type"] == "building"
+    assert proxy["weight"] > 0
 
 
 def test_pipeline_summary_reports_running_ingest_stage(tmp_path, monkeypatch) -> None:

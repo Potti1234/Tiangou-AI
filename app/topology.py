@@ -616,6 +616,7 @@ def build_topology_preview(
     include_hk_interties: bool = False,
     hk_intertie_derate: float = 1.0,
     min_voltage_kv: float | None = None,
+    consumer_proxies: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     _validate_derate(hk_intertie_derate)
     _validate_min_voltage(min_voltage_kv)
@@ -761,7 +762,13 @@ def build_topology_preview(
     buses = _drop_unreferenced_synthetic_buses(buses, branches)
     if include_hk_interties:
         branches.extend(_hk_intertie_branches(buses, derate=hk_intertie_derate))
-    load_allocations = _allocate_loads(buses, demand_snapshot=demand_snapshot, calibration=calibration)
+    load_allocations = _allocate_loads(
+        buses,
+        demand_snapshot=demand_snapshot,
+        calibration=calibration,
+        consumer_proxies=list(consumer_proxies or []),
+    )
+    allocation_validation = _load_allocation_validation(load_allocations)
     backbone_branches = _synthetic_service_territory_backbone(buses, branches, load_allocations)
     branches.extend(backbone_branches)
     circuit_class_counts = _count_by(branches, "circuit_class")
@@ -779,8 +786,9 @@ def build_topology_preview(
             "demand_snapshot": demand_snapshot,
             "demand_snapshot_label": snapshot["label"],
             "load_factor": snapshot["load_factor"],
-            "demand_allocation_method": "voltage_weighted_substation_split",
+            "demand_allocation_method": allocation_validation["method"],
             "load_power_factor": LOAD_DEFAULTS["power_factor"],
+            "load_allocation_validation": allocation_validation,
             "calibration": _topology_calibration_metadata(calibration),
             "calibration_warnings": calibration.warnings if calibration is not None else [],
             "include_hk_interties": include_hk_interties,
@@ -814,6 +822,7 @@ def build_powermodels_preview(
     include_hk_interties: bool = False,
     hk_intertie_derate: float = 1.0,
     min_voltage_kv: float | None = None,
+    consumer_proxies: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     topology = build_topology_preview(
         rows,
@@ -822,6 +831,7 @@ def build_powermodels_preview(
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
+        consumer_proxies=consumer_proxies,
     )
     return topology_preview_to_powermodels(topology)
 
@@ -834,6 +844,7 @@ def build_powermodels_validation(
     include_hk_interties: bool = False,
     hk_intertie_derate: float = 1.0,
     min_voltage_kv: float | None = None,
+    consumer_proxies: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     case = build_powermodels_preview(
         rows,
@@ -842,6 +853,7 @@ def build_powermodels_validation(
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
+        consumer_proxies=consumer_proxies,
     )
     return validate_powermodels_case(case)
 
@@ -938,6 +950,10 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "source_energy_gwh": load.get("source_energy_gwh"),
             "inference_method": load.get("inference_method"),
             "geometry_provenance": load.get("geometry_provenance"),
+            "proxy_count": load.get("proxy_count"),
+            "proxy_total_weight": load.get("proxy_total_weight"),
+            "proxy_assignment_distance_avg_km": load.get("proxy_assignment_distance_avg_km"),
+            "proxy_assignment_distance_median_km": load.get("proxy_assignment_distance_median_km"),
         }
 
     gen_dict = {}
@@ -993,6 +1009,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "load_factor": topology["metadata"]["load_factor"],
             "demand_allocation_method": topology["metadata"]["demand_allocation_method"],
             "load_power_factor": topology["metadata"]["load_power_factor"],
+            "load_allocation_validation": topology["metadata"].get("load_allocation_validation"),
             "calibration": topology["metadata"].get("calibration"),
             "calibration_warnings": topology["metadata"].get("calibration_warnings", []),
             "include_hk_interties": topology["metadata"]["include_hk_interties"],
@@ -2809,11 +2826,25 @@ def _allocate_loads(
     *,
     demand_snapshot: str,
     calibration: CalibrationBundle | None = None,
+    consumer_proxies: list[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     snapshot = _demand_snapshot(demand_snapshot, calibration)
-    loads = _allocate_hk_electric_observed_loads(buses, demand_snapshot=demand_snapshot, calibration=calibration)
+    proxies = list(consumer_proxies or [])
+    loads = _allocate_hk_electric_observed_loads(
+        buses,
+        demand_snapshot=demand_snapshot,
+        calibration=calibration,
+        consumer_proxies=proxies,
+    )
     if calibration is not None and calibration.clp_inference_method:
-        loads.extend(_allocate_inferred_clp_loads(buses, demand_snapshot=demand_snapshot, calibration=calibration))
+        loads.extend(
+            _allocate_inferred_clp_loads(
+                buses,
+                demand_snapshot=demand_snapshot,
+                calibration=calibration,
+                consumer_proxies=proxies,
+            )
+        )
     else:
         loads.extend(_allocate_synthetic_clp_loads(buses, demand_snapshot=demand_snapshot))
     if loads:
@@ -2857,11 +2888,145 @@ def _allocate_loads(
     return loads
 
 
+def _proxy_allocated_sector_loads(
+    buses: list[dict[str, Any]],
+    proxies: list[Mapping[str, Any]],
+    *,
+    territory: str,
+    sector: str,
+    sector_gwh: float,
+    sector_snapshot_mw: float,
+    sector_peak_mw: float,
+    demand_snapshot: str,
+    provenance: str,
+    source_file: str | None = None,
+    source_files: list[str] | None = None,
+    source_year: int | None = None,
+    source_period: str | None = None,
+    source_periods: list[str] | None = None,
+    inference_method: str | None = None,
+    confidence: float = 0.65,
+) -> list[dict[str, Any]]:
+    eligible = _eligible_load_buses(buses, territory)
+    if not eligible:
+        fallback = _fallback_load_bus(buses, territory)
+        eligible = [fallback] if fallback is not None else []
+    if not eligible:
+        return []
+    sector_proxies = [
+        proxy
+        for proxy in proxies
+        if proxy.get("sector") == sector
+        and proxy.get("lat") is not None
+        and proxy.get("lon") is not None
+        and float(proxy.get("weight") or 0.0) > 0
+        and _nearest_proxy_service_territory(buses, (float(proxy["lat"]), float(proxy["lon"]))) == territory
+    ]
+    if not sector_proxies:
+        return []
+
+    assignments: dict[str, dict[str, Any]] = {}
+    for proxy in sector_proxies:
+        bus, distance_km = _nearest_load_bus(eligible, (float(proxy["lat"]), float(proxy["lon"])))
+        if bus is None or distance_km is None:
+            continue
+        bucket = assignments.setdefault(
+            bus["id"],
+            {
+                "bus": bus,
+                "proxy_count": 0,
+                "proxy_total_weight": 0.0,
+                "weighted_distance_km": 0.0,
+                "distances": [],
+                "confidence_weight": 0.0,
+            },
+        )
+        weight = float(proxy["weight"])
+        proxy_confidence = float(proxy.get("confidence") or confidence)
+        bucket["proxy_count"] += 1
+        bucket["proxy_total_weight"] += weight
+        bucket["weighted_distance_km"] += distance_km * weight
+        bucket["distances"].append(distance_km)
+        bucket["confidence_weight"] += proxy_confidence * weight
+    total_weight = sum(bucket["proxy_total_weight"] for bucket in assignments.values())
+    if total_weight <= 0.0:
+        return []
+
+    loads = []
+    for bus_id, bucket in sorted(assignments.items()):
+        share = bucket["proxy_total_weight"] / total_weight
+        pd_mw = sector_snapshot_mw * share
+        peak_pd_mw = sector_peak_mw * share
+        source_energy_gwh = sector_gwh * share
+        distances = sorted(bucket["distances"])
+        median_distance = distances[len(distances) // 2] if distances else None
+        avg_distance = bucket["weighted_distance_km"] / bucket["proxy_total_weight"]
+        loads.append(
+            {
+                "id": f"load:{territory}:{sector}:proxy:{bus_id}",
+                "bus_id": bus_id,
+                "service_territory": territory,
+                "sector": sector,
+                "pd_mw": round(pd_mw, 3),
+                "qd_mvar": round(_reactive_mvar(pd_mw), 3),
+                "snapshot": demand_snapshot,
+                "provenance": provenance,
+                "allocation_method": provenance,
+                "allocation_rule": provenance,
+                "allocation_weight": round(share, 6),
+                "load_factor": round(pd_mw / peak_pd_mw, 6) if peak_pd_mw else None,
+                "peak_pd_mw": round(peak_pd_mw, 3),
+                "source_file": source_file,
+                "source_files": source_files,
+                "source_year": source_year,
+                "source_period": source_period,
+                "source_periods": source_periods,
+                "source_energy_gwh": round(source_energy_gwh, 3),
+                "inference_method": inference_method,
+                "geometry_provenance": "osm_consumer_proxy",
+                "proxy_count": bucket["proxy_count"],
+                "proxy_total_weight": round(bucket["proxy_total_weight"], 3),
+                "proxy_assignment_distance_avg_km": round(avg_distance, 3),
+                "proxy_assignment_distance_median_km": round(median_distance, 3) if median_distance is not None else None,
+                "confidence": round(bucket["confidence_weight"] / bucket["proxy_total_weight"], 3),
+            }
+        )
+    return loads
+
+
+def _nearest_load_bus(eligible: list[dict[str, Any]], point: tuple[float, float]) -> tuple[dict[str, Any] | None, float | None]:
+    candidates = [
+        (bus, _haversine_km(point, (float(bus["lat"]), float(bus["lon"]))))
+        for bus in eligible
+        if bus.get("lat") is not None and bus.get("lon") is not None
+    ]
+    if not candidates:
+        bus = max(eligible, key=_load_allocation_weight, default=None)
+        return bus, None
+    return min(candidates, key=lambda item: (item[1], -_load_allocation_weight(item[0])))
+
+
+def _nearest_proxy_service_territory(buses: list[dict[str, Any]], point: tuple[float, float]) -> str | None:
+    candidates = []
+    for territory in ("clp", "hk-electric"):
+        eligible = _eligible_load_buses(buses, territory)
+        fallback = _fallback_load_bus(buses, territory)
+        if fallback is not None:
+            eligible = [*eligible, fallback]
+        bus, distance = _nearest_load_bus(eligible, point)
+        if bus is not None and distance is not None:
+            candidates.append((territory, distance, -_load_allocation_weight(bus)))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: (item[1], item[2]))[0]
+
+
 def _allocate_hk_electric_observed_loads(
     buses: list[dict[str, Any]],
     *,
     demand_snapshot: str,
     calibration: CalibrationBundle | None,
+    consumer_proxies: list[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if calibration is None:
         return []
@@ -2874,11 +3039,34 @@ def _allocate_hk_electric_observed_loads(
 
     loads: list[dict[str, Any]] = []
     source_file = calibration.metadata.get("district_source_file")
+    proxies = list(consumer_proxies or [])
+    for sector, sector_gwh in calibration.sector_gwh.items():
+        proxy_loads = _proxy_allocated_sector_loads(
+            buses,
+            proxies,
+            territory="hk-electric",
+            sector=sector,
+            sector_gwh=sector_gwh,
+            sector_snapshot_mw=calibration.snapshot_mw_by_sector.get(sector, {}).get(demand_snapshot, 0.0),
+            sector_peak_mw=calibration.peak_mw_by_sector.get(sector, 0.0),
+            demand_snapshot=demand_snapshot,
+            provenance="observed_hk_electric_proxy_allocated",
+            source_file=source_file,
+            source_year=calibration.source_year,
+            source_period="annual" if not calibration.is_partial_year else "partial_year",
+            source_periods=calibration.source_periods,
+            confidence=0.68,
+        )
+        if proxy_loads:
+            loads.extend(proxy_loads)
+    proxied_sectors = {load["sector"] for load in loads}
     for district, sectors in calibration.district_sector_gwh.items():
         bus = _nearest_district_load_bus(eligible, district)
         if bus is None:
             continue
         for sector, district_gwh in sectors.items():
+            if sector in proxied_sectors:
+                continue
             sector_gwh = calibration.sector_gwh.get(sector, 0.0)
             sector_snapshot_mw = calibration.snapshot_mw_by_sector.get(sector, {}).get(demand_snapshot, 0.0)
             sector_peak_mw = calibration.peak_mw_by_sector.get(sector, 0.0)
@@ -2898,8 +3086,8 @@ def _allocate_hk_electric_observed_loads(
                     "pd_mw": round(pd_mw, 3),
                     "qd_mvar": round(_reactive_mvar(pd_mw), 3),
                     "snapshot": demand_snapshot,
-                    "provenance": "observed_hk_electric_public_consumption",
-                    "allocation_method": allocation_method,
+                    "provenance": "observed_hk_electric_substation_allocated",
+                    "allocation_method": "observed_hk_electric_substation_allocated",
                     "allocation_rule": allocation_method,
                     "allocation_weight": round(share, 6),
                     "load_factor": round(pd_mw / peak_pd_mw, 6) if peak_pd_mw else None,
@@ -2964,6 +3152,7 @@ def _allocate_inferred_clp_loads(
     *,
     demand_snapshot: str,
     calibration: CalibrationBundle,
+    consumer_proxies: list[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     territory = "clp"
     eligible = _eligible_load_buses(buses, territory)
@@ -2982,10 +3171,32 @@ def _allocate_inferred_clp_loads(
     ]
     source_files = [str(path) for path in source_files if path]
     loads: list[dict[str, Any]] = []
+    proxies = list(consumer_proxies or [])
     for sector, sector_gwh in calibration.inferred_clp_sector_gwh.items():
         sector_snapshot_mw = calibration.clp_snapshot_mw_by_sector.get(sector, {}).get(demand_snapshot, 0.0)
         sector_peak_mw = calibration.clp_peak_mw_by_sector.get(sector, 0.0)
         if sector_gwh <= 0 or sector_snapshot_mw <= 0:
+            continue
+        proxy_loads = _proxy_allocated_sector_loads(
+            buses,
+            proxies,
+            territory=territory,
+            sector=sector,
+            sector_gwh=sector_gwh,
+            sector_snapshot_mw=sector_snapshot_mw,
+            sector_peak_mw=sector_peak_mw,
+            demand_snapshot=demand_snapshot,
+            provenance="inferred_clp_proxy_allocated",
+            source_file=source_file,
+            source_files=source_files,
+            source_year=calibration.source_year,
+            source_period="annual",
+            source_periods=calibration.source_periods,
+            inference_method=calibration.clp_inference_method,
+            confidence=0.58,
+        )
+        if proxy_loads:
+            loads.extend(proxy_loads)
             continue
         for bus in eligible:
             weight = weights[bus["id"]]
@@ -3001,8 +3212,8 @@ def _allocate_inferred_clp_loads(
                     "pd_mw": round(pd_mw, 3),
                     "qd_mvar": round(_reactive_mvar(pd_mw), 3),
                     "snapshot": demand_snapshot,
-                    "provenance": "inferred_clp_from_hk_total_minus_hk_electric",
-                    "allocation_method": "inferred_clp_voltage_weighted_substation_split",
+                    "provenance": "inferred_clp_substation_allocated",
+                    "allocation_method": "inferred_clp_substation_allocated",
                     "allocation_rule": "inferred_clp_voltage_weighted_substation_split",
                     "allocation_weight": round(weight, 6),
                     "load_factor": round(pd_mw / peak_pd_mw, 6) if peak_pd_mw else None,
@@ -3018,6 +3229,69 @@ def _allocate_inferred_clp_loads(
                 }
             )
     return loads
+
+
+def _load_allocation_validation(loads: list[Mapping[str, Any]]) -> dict[str, Any]:
+    total_mw = sum(float(load.get("pd_mw") or 0.0) for load in loads)
+    proxy_mw = sum(float(load.get("pd_mw") or 0.0) for load in loads if "proxy_allocated" in str(load.get("provenance") or ""))
+    fallback_mw = max(total_mw - proxy_mw, 0.0)
+    proxy_share = round(proxy_mw / total_mw, 6) if total_mw else 0.0
+    distances: list[float] = []
+    proxy_count_by_sector: dict[str, int] = {}
+    sector_totals: dict[str, float] = {}
+    sector_pd_totals: dict[str, float] = {}
+    bus_totals: dict[str, float] = {}
+    proxy_distance_sum = 0.0
+    proxy_distance_count = 0
+    for load in loads:
+        sector = str(load.get("sector") or "aggregate")
+        sector_totals[sector] = sector_totals.get(sector, 0.0) + float(load.get("source_energy_gwh") or 0.0)
+        sector_pd_totals[sector] = sector_pd_totals.get(sector, 0.0) + float(load.get("pd_mw") or 0.0)
+        bus_id = str(load.get("bus_id") or "unknown")
+        bus_totals[bus_id] = bus_totals.get(bus_id, 0.0) + float(load.get("pd_mw") or 0.0)
+        proxy_count = int(load.get("proxy_count") or 0)
+        if proxy_count:
+            proxy_count_by_sector[sector] = proxy_count_by_sector.get(sector, 0) + proxy_count
+            avg_distance = load.get("proxy_assignment_distance_avg_km")
+            if avg_distance is not None:
+                proxy_distance_sum += float(avg_distance) * proxy_count
+                proxy_distance_count += proxy_count
+        distance = load.get("proxy_assignment_distance_median_km")
+        if distance is not None and proxy_count:
+            distances.extend([float(distance)] * proxy_count)
+    distances.sort()
+    median_distance = distances[len(distances) // 2] if distances else None
+    warnings = []
+    if total_mw and proxy_share < 0.5:
+        warnings.append({"code": "proxy_allocation_share_low", "message": "Less than 50 percent of modeled demand is allocated with consumer proxies."})
+    if median_distance is not None and median_distance > 3.0:
+        warnings.append({"code": "proxy_assignment_distance_high", "message": "Median proxy-to-bus assignment distance exceeds 3 km.", "median_distance_km": round(median_distance, 3)})
+    sectors = sorted({str(load.get("sector")) for load in loads if load.get("sector")})
+    for sector in sectors:
+        if proxy_count_by_sector.get(sector, 0) == 0:
+            warnings.append({"code": "sector_proxy_fallback", "message": "Sector has no proxy allocation and falls back to substations.", "sector": sector})
+    method = "proxy_weighted_bus_sector_allocation" if proxy_mw > 0 else "voltage_weighted_substation_split"
+    return {
+        "method": method,
+        "total_pd_mw": round(total_mw, 3),
+        "proxy_allocated_pd_mw": round(proxy_mw, 3),
+        "fallback_allocated_pd_mw": round(fallback_mw, 3),
+        "proxy_allocation_share": proxy_share,
+        "fallback_allocation_share": round(fallback_mw / total_mw, 6) if total_mw else 0.0,
+        "proxy_count_by_sector": dict(sorted(proxy_count_by_sector.items())),
+        "source_energy_gwh_by_sector": {key: round(value, 3) for key, value in sorted(sector_totals.items())},
+        "average_proxy_to_bus_distance_km": round(proxy_distance_sum / proxy_distance_count, 3) if proxy_distance_count else None,
+        "median_proxy_to_bus_distance_km": round(median_distance, 3) if median_distance is not None else None,
+        "top_buses_by_allocated_demand": [
+            {"bus_id": bus_id, "pd_mw": round(pd_mw, 3)}
+            for bus_id, pd_mw in sorted(bus_totals.items(), key=lambda item: item[1], reverse=True)[:10]
+        ],
+        "top_sectors_by_allocated_demand": [
+            {"sector": sector, "pd_mw": round(pd_mw, 3)}
+            for sector, pd_mw in sorted(sector_pd_totals.items(), key=lambda item: item[1], reverse=True)[:10]
+        ],
+        "warnings": warnings,
+    }
 
 
 def _eligible_load_buses(buses: list[dict[str, Any]], territory: str) -> list[dict[str, Any]]:

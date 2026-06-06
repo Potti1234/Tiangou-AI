@@ -10,15 +10,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.data_sources import load_calibration_bundle
 from app.database import get_db, init_db
-from app.overpass import OverpassClient, OverpassError, build_power_query
+from app.load_proxies import PROXY_GROUPS, normalize_consumer_proxy_element, rows_to_consumer_proxies
+from app.overpass import OverpassClient, OverpassError, build_consumer_proxy_query, build_power_query
 from app.regions import REGIONS, get_region
 from app.repository import (
     complete_ingest_run,
     create_ingest_run,
     get_element,
     latest_ingest_run,
+    list_consumer_proxy_elements,
     list_elements,
     summarize,
+    upsert_consumer_proxy_elements,
     upsert_elements,
 )
 from app.topology import (
@@ -126,6 +129,21 @@ def overpass_query(region_key: str) -> dict[str, str]:
     return {"region_key": region.key, "query": build_power_query(region)}
 
 
+@app.get("/overpass-query/{region_key}/consumer-proxies")
+def consumer_proxy_overpass_query(region_key: str, group: str | None = None) -> dict[str, str]:
+    try:
+        region = get_region(region_key)
+        query = build_consumer_proxy_query(region, group=group)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"region_key": region.key, "group": group or "all", "query": query}
+
+
+@app.post("/ingest/hong-kong-consumer-proxies")
+async def ingest_hong_kong_consumer_proxies() -> dict[str, Any]:
+    return await ingest_consumer_proxies("hong-kong")
+
+
 @app.post("/ingest/{region_key}")
 async def ingest(region_key: str) -> dict[str, Any]:
     try:
@@ -163,6 +181,53 @@ async def ingest(region_key: str) -> dict[str, Any]:
         "region_key": region.key,
         "fetched_count": len(elements),
         "stored_count": stored_count,
+    }
+
+
+@app.post("/ingest/consumer-proxies/{region_key}")
+async def ingest_consumer_proxies(region_key: str) -> dict[str, Any]:
+    try:
+        region = get_region(region_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    client = OverpassClient()
+    group_results = []
+    total_fetched = 0
+    total_stored = 0
+    errors = []
+    for group in PROXY_GROUPS:
+        query = build_consumer_proxy_query(region, group=group)
+        with get_db() as conn:
+            ingest_run_id = create_ingest_run(conn, region.key, query)
+        try:
+            payload = await client.fetch(query)
+            elements = payload.get("elements", [])
+            proxies = [
+                proxy
+                for element in elements
+                if (proxy := normalize_consumer_proxy_element(element, region_key=region.key)) is not None
+            ]
+            with get_db() as conn:
+                stored_count = upsert_consumer_proxy_elements(conn, proxies=proxies)
+                complete_ingest_run(conn, ingest_run_id, "completed", stored_count)
+            total_fetched += len(elements)
+            total_stored += stored_count
+            group_results.append({"group": group, "ingest_run_id": ingest_run_id, "status": "completed", "fetched_count": len(elements), "stored_count": stored_count})
+        except (OverpassError, httpx.HTTPError) as exc:
+            error = str(exc)
+            with get_db() as conn:
+                complete_ingest_run(conn, ingest_run_id, "failed", 0, error)
+            errors.append({"group": group, "error": error})
+            group_results.append({"group": group, "ingest_run_id": ingest_run_id, "status": "failed", "fetched_count": 0, "stored_count": 0, "error": error})
+
+    return {
+        "region_key": region.key,
+        "status": "partial" if errors and total_stored else "failed" if errors else "completed",
+        "fetched_count": total_fetched,
+        "stored_count": total_stored,
+        "groups": group_results,
+        "errors": errors,
     }
 
 
@@ -207,6 +272,21 @@ def grid_summary() -> list[dict[str, Any]]:
         return [_row_dict(row) for row in summarize(conn)]
 
 
+@app.get("/grid/consumer-proxies")
+def consumer_proxies(
+    region_key: str = "hong-kong",
+    sector: str | None = None,
+    limit: int = Query(default=1000, ge=1, le=100000),
+    offset: int = Query(default=0, ge=0),
+) -> list[dict[str, Any]]:
+    try:
+        get_region(region_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    with get_db() as conn:
+        return rows_to_consumer_proxies(list_consumer_proxy_elements(conn, region_key=region_key, sector=sector, limit=limit, offset=offset))
+
+
 @app.get("/grid/topology/preview")
 def topology_preview(
     region_key: str = "hong-kong",
@@ -227,6 +307,7 @@ def topology_preview(
             region_key=region_key,
             limit=100000,
         )
+        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
     return build_topology_preview(
         rows,
         snap_tolerance_km=snap_tolerance_km,
@@ -234,6 +315,7 @@ def topology_preview(
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
+        consumer_proxies=rows_to_consumer_proxies(proxy_rows),
     )
 
 
@@ -257,6 +339,7 @@ def powermodels_preview(
             region_key=region_key,
             limit=100000,
         )
+        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
     return build_powermodels_preview(
         rows,
         snap_tolerance_km=snap_tolerance_km,
@@ -264,6 +347,7 @@ def powermodels_preview(
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
+        consumer_proxies=rows_to_consumer_proxies(proxy_rows),
     )
 
 
@@ -287,6 +371,7 @@ def topology_validation(
             region_key=region_key,
             limit=100000,
         )
+        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
     return build_powermodels_validation(
         rows,
         snap_tolerance_km=snap_tolerance_km,
@@ -294,6 +379,7 @@ def topology_validation(
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
+        consumer_proxies=rows_to_consumer_proxies(proxy_rows),
     )
 
 
@@ -317,6 +403,7 @@ def topology_diagnostics(
             region_key=region_key,
             limit=100000,
         )
+        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
     case = build_powermodels_preview(
         rows,
         snap_tolerance_km=snap_tolerance_km,
@@ -324,6 +411,7 @@ def topology_diagnostics(
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
+        consumer_proxies=rows_to_consumer_proxies(proxy_rows),
     )
     return build_topology_diagnostics(case)
 
@@ -348,6 +436,7 @@ def topology_asset_reconciliation(
             region_key=region_key,
             limit=100000,
         )
+        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
     topology = build_topology_preview(
         rows,
         snap_tolerance_km=snap_tolerance_km,
@@ -355,6 +444,7 @@ def topology_asset_reconciliation(
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
+        consumer_proxies=rows_to_consumer_proxies(proxy_rows),
     )
     case = topology_preview_to_powermodels(topology)
     return build_asset_reconciliation(rows, topology, case)
@@ -381,6 +471,8 @@ def topology_pipeline_summary(
             limit=100000,
         )
         latest_ingest = latest_ingest_run(conn, region_key)
+        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
+    consumer_proxies_payload = rows_to_consumer_proxies(proxy_rows)
 
     topology = build_topology_preview(
         rows,
@@ -389,6 +481,7 @@ def topology_pipeline_summary(
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
+        consumer_proxies=consumer_proxies_payload,
     )
     case = build_powermodels_preview(
         rows,
@@ -397,6 +490,7 @@ def topology_pipeline_summary(
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
+        consumer_proxies=consumer_proxies_payload,
     )
     validation = validate_powermodels_case(case)
     diagnostics = build_topology_diagnostics(case)
@@ -446,6 +540,7 @@ def topology_pipeline_summary(
         "stage_status": stage_status,
         "latest_ingest_run": latest_ingest_payload,
         "raw_osm_counts_by_power": dict(sorted(raw_counts.items())),
+        "consumer_proxy_count": len(consumer_proxies_payload),
         "topology_metadata": topology["metadata"],
         "quality": topology["quality"],
         "solver_metadata": case["_metadata"],

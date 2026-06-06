@@ -4,6 +4,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.load_proxies import consumer_proxy_query_filters
 from app.regions import Region
 
 
@@ -76,6 +77,39 @@ def build_power_query(region: Region, timeout_seconds: int = 120) -> str:
 {chr(10).join(query_lines)}
 );
 out body geom;
+"""
+
+
+def build_consumer_proxy_query(region: Region, *, group: str | None = None, timeout_seconds: int = 180) -> str:
+    area_blocks = []
+    query_lines = []
+    filters = consumer_proxy_query_filters(group)
+    for index, area_name in enumerate(region.area_names):
+        ref = f".area{index}"
+        escaped_name = _quote(area_name)
+        area_blocks.append(
+            "\n".join(
+                (
+                    "(",
+                    f'  area["boundary"="administrative"]["name"={escaped_name}];',
+                    f'  area["boundary"="administrative"]["name:en"={escaped_name}];',
+                    f")->{ref};",
+                )
+            )
+        )
+    for index in range(len(region.area_names)):
+        area_ref = f"area.area{index}"
+        for key, value in filters:
+            if value is None:
+                query_lines.append(f'  nwr["{key}"]({area_ref});')
+            else:
+                query_lines.append(f'  nwr["{key}"="{value}"]({area_ref});')
+    return f"""[out:json][timeout:{timeout_seconds}];
+{chr(10).join(area_blocks)}
+(
+{chr(10).join(query_lines)}
+);
+out body center geom;
 """
 
 

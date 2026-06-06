@@ -120,6 +120,85 @@ def upsert_elements(
     return count
 
 
+def upsert_consumer_proxy_elements(
+    conn: sqlite3.Connection,
+    *,
+    proxies: Iterable[dict[str, Any]],
+) -> int:
+    count = 0
+    for proxy in proxies:
+        if proxy.get("lat") is None or proxy.get("lon") is None:
+            continue
+        conn.execute(
+            """
+            INSERT INTO consumer_proxy_elements (
+                osm_type, osm_id, region_key, proxy_type, sector, weight, weight_method,
+                confidence, name, tags_json, geometry_json, lat, lon, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(osm_type, osm_id, region_key, proxy_type) DO UPDATE SET
+                sector = excluded.sector,
+                weight = excluded.weight,
+                weight_method = excluded.weight_method,
+                confidence = excluded.confidence,
+                name = excluded.name,
+                tags_json = excluded.tags_json,
+                geometry_json = excluded.geometry_json,
+                lat = excluded.lat,
+                lon = excluded.lon,
+                updated_at = datetime('now')
+            """,
+            (
+                proxy["osm_type"],
+                int(proxy["osm_id"]),
+                proxy["region_key"],
+                proxy["proxy_type"],
+                proxy["sector"],
+                float(proxy["weight"]),
+                proxy.get("weight_method"),
+                proxy.get("confidence"),
+                proxy.get("name"),
+                _json(proxy.get("tags") or {}),
+                _json(proxy.get("geometry")),
+                proxy.get("lat"),
+                proxy.get("lon"),
+            ),
+        )
+        count += 1
+    return count
+
+
+def list_consumer_proxy_elements(
+    conn: sqlite3.Connection,
+    *,
+    region_key: str | None = None,
+    sector: str | None = None,
+    limit: int = 100000,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    clauses = []
+    params: list[Any] = []
+    if region_key:
+        clauses.append("region_key = ?")
+        params.append(region_key)
+    if sector:
+        clauses.append("sector = ?")
+        params.append(sector)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.extend([limit, offset])
+    return conn.execute(
+        f"""
+        SELECT osm_type, osm_id, region_key, proxy_type, sector, weight, weight_method,
+               confidence, name, tags_json, geometry_json, lat, lon, updated_at
+        FROM consumer_proxy_elements
+        {where}
+        ORDER BY sector, weight DESC, proxy_type, osm_type, osm_id
+        LIMIT ? OFFSET ?
+        """,
+        params,
+    ).fetchall()
+
+
 def list_elements(
     conn: sqlite3.Connection,
     *,

@@ -30,7 +30,7 @@ def test_export_powermodels_case_writes_json(tmp_path) -> None:
     assert payload["baseMVA"] == 100.0
     assert payload["_metadata"]["total_pd_mw"] == 7385.731
     assert payload["_metadata"]["provenance_summary"]["load"] == {
-        "inferred_clp_from_hk_total_minus_hk_electric": 8
+        "inferred_clp_substation_allocated": 8
     }
 
 
@@ -69,8 +69,8 @@ def test_export_hk_electric_load_allocation_writes_provenance_artifact(tmp_path)
         "allocation_rule",
     } <= set(payload["loads"][0])
     assert {load["provenance"] for load in payload["loads"]} == {
-        "observed_hk_electric_public_consumption",
-        "inferred_clp_from_hk_total_minus_hk_electric",
+        "observed_hk_electric_substation_allocated",
+        "inferred_clp_substation_allocated",
     }
 
 
