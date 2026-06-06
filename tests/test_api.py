@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.config import settings
-from app.repository import create_ingest_run, list_consumer_proxy_allocation_rows
+from app.repository import create_ingest_run, list_consumer_proxy_allocation_rows, upsert_consumer_proxy_elements
 
 
 def test_health_initializes_database(tmp_path, monkeypatch) -> None:
@@ -247,6 +247,109 @@ def test_consumer_proxy_ingest_endpoint_stores_normalized_rows(tmp_path, monkeyp
     with main.get_db() as conn:
         allocation_row = dict(list_consumer_proxy_allocation_rows(conn, region_key="hong-kong")[0])
     assert set(allocation_row) == {"sector", "proxy_type", "weight", "confidence", "lat", "lon"}
+
+
+def test_important_consumer_proxy_endpoint_prioritizes_small_important_categories(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", tmp_path / "api.sqlite3")
+
+    with TestClient(main.app) as client:
+        with main.get_db() as conn:
+            proxies = [
+                {
+                    "osm_type": "node",
+                    "osm_id": 1,
+                    "region_key": "hong-kong",
+                    "proxy_type": "building",
+                    "sector": "commercial",
+                    "weight": 1_000_000.0,
+                    "weight_method": "building_floor_area_proxy",
+                    "confidence": 0.5,
+                    "name": "Huge Generic Tower",
+                    "tags": {"building": "yes"},
+                    "lat": 22.30,
+                    "lon": 114.10,
+                },
+                {
+                    "osm_type": "node",
+                    "osm_id": 2,
+                    "region_key": "hong-kong",
+                    "proxy_type": "building",
+                    "sector": "commercial",
+                    "weight": 5.0,
+                    "weight_method": "poi_default_weight",
+                    "confidence": 0.7,
+                    "name": "North Data Centre",
+                    "tags": {"building": "yes", "telecom": "data_center"},
+                    "lat": 22.31,
+                    "lon": 114.11,
+                },
+                {
+                    "osm_type": "node",
+                    "osm_id": 3,
+                    "region_key": "hong-kong",
+                    "proxy_type": "building",
+                    "sector": "commercial",
+                    "weight": 6.0,
+                    "weight_method": "building_floor_area_proxy",
+                    "confidence": 0.7,
+                    "name": "General Hospital",
+                    "tags": {"building": "hospital"},
+                    "lat": 22.32,
+                    "lon": 114.12,
+                },
+                {
+                    "osm_type": "node",
+                    "osm_id": 4,
+                    "region_key": "hong-kong",
+                    "proxy_type": "charging_station",
+                    "sector": "transport_or_public_services",
+                    "weight": 12.0,
+                    "weight_method": "charging_station_socket_count",
+                    "confidence": 0.65,
+                    "name": "Fast Charger",
+                    "tags": {"amenity": "charging_station"},
+                    "lat": 22.33,
+                    "lon": 114.13,
+                },
+                {
+                    "osm_type": "node",
+                    "osm_id": 5,
+                    "region_key": "hong-kong",
+                    "proxy_type": "station",
+                    "sector": "transport_or_public_services",
+                    "weight": 80.0,
+                    "weight_method": "poi_default_weight",
+                    "confidence": 0.75,
+                    "name": "Central Station",
+                    "tags": {"railway": "station"},
+                    "lat": 22.34,
+                    "lon": 114.14,
+                },
+                {
+                    "osm_type": "node",
+                    "osm_id": 6,
+                    "region_key": "hong-kong",
+                    "proxy_type": "wastewater_plant",
+                    "sector": "industrial",
+                    "weight": 90.0,
+                    "weight_method": "poi_default_weight",
+                    "confidence": 0.75,
+                    "name": "Treatment Works",
+                    "tags": {"man_made": "wastewater_plant"},
+                    "lat": 22.35,
+                    "lon": 114.15,
+                },
+            ]
+            upsert_consumer_proxy_elements(conn, proxies=proxies)
+
+        response = client.get("/grid/consumer-proxies/important", params={"region_key": "hong-kong", "limit": 5})
+
+    assert response.status_code == 200
+    payload = response.json()
+    reasons = {marker["reason"] for marker in payload}
+    assert len(payload) == 5
+    assert {"data_center", "hospital", "charging_station", "station", "industrial_infrastructure"} <= reasons
+    assert all("tags" not in marker and "geometry" not in marker for marker in payload)
 
 
 def test_pipeline_summary_reports_running_ingest_stage(tmp_path, monkeypatch) -> None:

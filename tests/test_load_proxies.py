@@ -9,6 +9,29 @@ def test_proxy_sector_classification() -> None:
     assert classify_proxy({"amenity": "cafe"}) is None
 
 
+def test_high_signal_proxy_classification_wins_over_generic_building() -> None:
+    assert classify_proxy({"building": "yes", "amenity": "hospital"}) == {
+        "sector": "commercial",
+        "proxy_type": "hospital",
+        "confidence": 0.78,
+    }
+    assert classify_proxy({"building": "yes", "amenity": "charging_station"}) == {
+        "sector": "transport_or_public_services",
+        "proxy_type": "charging_station",
+        "confidence": 0.78,
+    }
+    assert classify_proxy({"building": "yes", "telecom": "data_center"}) == {
+        "sector": "commercial",
+        "proxy_type": "data_center",
+        "confidence": 0.82,
+    }
+    assert classify_proxy({"building": "yes", "man_made": "wastewater_plant"}) == {
+        "sector": "industrial",
+        "proxy_type": "wastewater_plant",
+        "confidence": 0.78,
+    }
+
+
 def test_proxy_weight_uses_building_floor_area() -> None:
     geometry = [
         {"lat": 22.3000, "lon": 114.1000},
@@ -39,3 +62,17 @@ def test_proxy_ingest_row_normalization_without_network() -> None:
     assert proxy["proxy_type"] == "charging_station"
     assert proxy["weight"] == 48.0
     assert proxy["name"] == "Mock Chargers"
+
+
+def test_charging_station_weight_wins_over_attached_building_area() -> None:
+    geometry = [
+        {"lat": 22.3000, "lon": 114.1000},
+        {"lat": 22.3000, "lon": 114.1010},
+        {"lat": 22.3010, "lon": 114.1010},
+        {"lat": 22.3010, "lon": 114.1000},
+    ]
+
+    weight = proxy_weight({"building": "yes", "amenity": "charging_station", "capacity": "2"}, geometry)
+
+    assert weight["weight"] == 12.0
+    assert weight["weight_method"] == "charging_station_socket_count"

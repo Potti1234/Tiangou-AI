@@ -23,7 +23,7 @@ from app.repository import (
     latest_ingest_run,
     list_consumer_proxy_allocation_rows,
     list_consumer_proxy_elements,
-    list_consumer_proxy_marker_rows,
+    list_important_consumer_proxy_marker_rows,
     list_elements,
     summarize,
     upsert_consumer_proxy_elements,
@@ -505,27 +505,26 @@ def important_consumer_proxies(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     with get_db() as conn:
-        rows = list_consumer_proxy_marker_rows(conn, region_key=region_key, limit=max(limit * 20, 1000))
+        rows = list_important_consumer_proxy_marker_rows(
+            conn,
+            region_key=region_key,
+            category_limits=_important_consumer_proxy_category_limits(limit),
+        )
 
-    markers = []
-    category_counts: dict[str, int] = {}
-    category_caps = {
-        "large_industrial_proxy": max(limit // 5, 20),
-        "large_commercial_proxy": max(limit // 5, 20),
-    }
+    markers: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for row in rows:
         proxy = dict(row)
-        tags_json = proxy.pop("tags_json", None)
-        proxy["tags"] = json.loads(tags_json) if tags_json else {}
-        reason = _important_proxy_reason(proxy)
-        if reason is None:
+        marker_id = f"{proxy['osm_type']}:{proxy['osm_id']}:{proxy['proxy_type']}"
+        if marker_id in seen:
             continue
-        if category_counts.get(reason, 0) >= category_caps.get(reason, limit):
-            continue
-        category_counts[reason] = category_counts.get(reason, 0) + 1
+        seen.add(marker_id)
+        reason = proxy["reason"]
+        if reason == "transport":
+            reason = "airport" if proxy["proxy_type"] == "aerodrome" else proxy["proxy_type"]
         markers.append(
             {
-                "id": f"{proxy['osm_type']}:{proxy['osm_id']}:{proxy['proxy_type']}",
+                "id": marker_id,
                 "name": proxy["name"],
                 "proxy_type": proxy["proxy_type"],
                 "sector": proxy["sector"],
@@ -539,6 +538,19 @@ def important_consumer_proxies(
         if len(markers) >= limit:
             break
     return markers
+
+
+def _important_consumer_proxy_category_limits(limit: int) -> dict[str, int]:
+    caps = {
+        "data_center": 100,
+        "hospital": 150,
+        "charging_station": 150,
+        "transport": 150,
+        "industrial_infrastructure": 150,
+        "large_industrial_proxy": 200,
+        "large_commercial_proxy": 200,
+    }
+    return {reason: min(cap, limit) for reason, cap in caps.items()}
 
 
 @app.get("/grid/topology/preview")

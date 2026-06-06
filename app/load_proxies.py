@@ -116,11 +116,32 @@ def classify_proxy(tags: Mapping[str, Any]) -> dict[str, Any] | None:
     landuse = str(tags.get("landuse") or "").lower()
     amenity = str(tags.get("amenity") or "").lower()
     man_made = str(tags.get("man_made") or "").lower()
+    telecom = str(tags.get("telecom") or "").lower()
     railway = str(tags.get("railway") or "").lower()
     public_transport = str(tags.get("public_transport") or "").lower()
     aeroway = str(tags.get("aeroway") or "").lower()
     office = tags.get("office")
     shop = str(tags.get("shop") or "").lower()
+    name_text = " ".join(
+        str(tags.get(key) or "").lower()
+        for key in ("name", "name:en", "operator", "brand")
+    )
+
+    if (
+        telecom == "data_center"
+        or building == "data_center"
+        or str(tags.get("data_center") or "").lower() in {"yes", "true", "1"}
+        or str(tags.get("data_centre") or "").lower() in {"yes", "true", "1"}
+        or "data center" in name_text
+        or "data centre" in name_text
+    ):
+        return {"sector": "commercial", "proxy_type": "data_center", "confidence": 0.82}
+    if amenity == "hospital" or building == "hospital" or "hospital" in name_text:
+        return {"sector": "commercial", "proxy_type": "hospital", "confidence": 0.78}
+    if amenity == "charging_station":
+        return {"sector": "transport_or_public_services", "proxy_type": "charging_station", "confidence": 0.78}
+    if man_made in {"works", "wastewater_plant", "water_works"}:
+        return {"sector": "industrial", "proxy_type": man_made, "confidence": 0.78}
 
     if building:
         if building in {"residential", "apartments", "house", "detached", "terrace", "dormitory"}:
@@ -140,8 +161,6 @@ def classify_proxy(tags: Mapping[str, Any]) -> dict[str, Any] | None:
         return {"sector": "commercial", "proxy_type": "mall", "confidence": 0.8}
     if amenity in {"hospital", "school", "university", "college"}:
         return {"sector": "commercial", "proxy_type": amenity, "confidence": 0.72}
-    if man_made in {"works", "wastewater_plant", "water_works"}:
-        return {"sector": "industrial", "proxy_type": man_made, "confidence": 0.75}
     if railway == "station" or public_transport == "station":
         return {"sector": "transport_or_public_services", "proxy_type": "station", "confidence": 0.75}
     if aeroway in {"aerodrome", "terminal"}:
@@ -157,6 +176,10 @@ def proxy_weight(tags: Mapping[str, Any], geometry: Any) -> dict[str, Any]:
     height = _parse_height_m(tags.get("height"))
     floor_multiplier = levels if levels is not None else max(height / 3.2, 1.0) if height is not None else 1.0
 
+    charging_weight = _charging_station_weight(tags)
+    if charging_weight is not None:
+        return {"weight": charging_weight, "weight_method": "charging_station_socket_count", "confidence": 0.65}
+
     if tags.get("building") and area:
         return {
             "weight": round(max(area * floor_multiplier, 1.0), 3),
@@ -169,10 +192,6 @@ def proxy_weight(tags: Mapping[str, Any], geometry: Any) -> dict[str, Any]:
             "weight_method": "landuse_polygon_area_proxy",
             "confidence": 0.72,
         }
-
-    charging_weight = _charging_station_weight(tags)
-    if charging_weight is not None:
-        return {"weight": charging_weight, "weight_method": "charging_station_socket_count", "confidence": 0.65}
 
     default = _default_poi_weight(tags)
     return {"weight": default, "weight_method": "poi_default_weight", "confidence": 0.5}

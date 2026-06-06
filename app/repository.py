@@ -242,6 +242,103 @@ def list_consumer_proxy_marker_rows(
     ).fetchall()
 
 
+def list_important_consumer_proxy_marker_rows(
+    conn: sqlite3.Connection,
+    *,
+    region_key: str,
+    category_limits: dict[str, int],
+) -> list[sqlite3.Row]:
+    rows: list[sqlite3.Row] = []
+    for reason, limit in category_limits.items():
+        if limit <= 0:
+            continue
+        rows.extend(_list_consumer_proxy_marker_rows_by_reason(conn, region_key=region_key, reason=reason, limit=limit))
+    return rows
+
+
+def _list_consumer_proxy_marker_rows_by_reason(
+    conn: sqlite3.Connection,
+    *,
+    region_key: str,
+    reason: str,
+    limit: int,
+) -> list[sqlite3.Row]:
+    text = "lower(coalesce(tags_json, '') || ' ' || coalesce(name, ''))"
+    base_where = """
+        region_key = ?
+        AND lat IS NOT NULL
+        AND lon IS NOT NULL
+    """
+    params: list[Any] = [region_key]
+    if reason == "data_center":
+        where = f"""
+            {base_where}
+            AND (
+                proxy_type = 'data_center'
+                OR {text} LIKE '%data_center%'
+                OR {text} LIKE '%data center%'
+                OR {text} LIKE '%data_centre%'
+                OR {text} LIKE '%data centre%'
+                OR {text} LIKE '%"telecom": "data_center"%'
+            )
+        """
+    elif reason == "hospital":
+        where = f"""
+            {base_where}
+            AND (
+                proxy_type = 'hospital'
+                OR {text} LIKE '%"amenity": "hospital"%'
+                OR {text} LIKE '%"building": "hospital"%'
+                OR {text} LIKE '%hospital%'
+            )
+        """
+    elif reason == "charging_station":
+        where = f"""
+            {base_where}
+            AND (
+                proxy_type = 'charging_station'
+                OR {text} LIKE '%"amenity": "charging_station"%'
+            )
+        """
+    elif reason == "transport":
+        where = f"""
+            {base_where}
+            AND proxy_type IN ('station', 'ferry_terminal', 'aerodrome', 'terminal')
+        """
+    elif reason == "industrial_infrastructure":
+        where = f"""
+            {base_where}
+            AND proxy_type IN ('works', 'water_works', 'wastewater_plant')
+        """
+    elif reason == "large_industrial_proxy":
+        where = f"""
+            {base_where}
+            AND sector = 'industrial'
+            AND proxy_type IN ('building', 'landuse')
+        """
+    elif reason == "large_commercial_proxy":
+        where = f"""
+            {base_where}
+            AND sector = 'commercial'
+            AND proxy_type IN ('building', 'landuse', 'office', 'mall')
+        """
+    else:
+        raise ValueError(f"Unknown important consumer proxy marker reason: {reason}")
+
+    params.append(limit)
+    return conn.execute(
+        f"""
+        SELECT osm_type, osm_id, region_key, proxy_type, sector, weight, confidence,
+               name, lat, lon, ? AS reason
+        FROM consumer_proxy_elements
+        WHERE {where}
+        ORDER BY weight DESC, proxy_type, osm_type, osm_id
+        LIMIT ?
+        """,
+        [reason, *params],
+    ).fetchall()
+
+
 def consumer_proxy_signature(conn: sqlite3.Connection, region_key: str) -> dict[str, Any]:
     row = conn.execute(
         """
