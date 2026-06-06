@@ -77,84 +77,93 @@ class DualTimelineSimulation:
 
             delta_P_B = state_B.Pm - state_B.Pe
 
-            # ── Physics-based early-warning predictor ────────────────────
-            # trajectory_60s is now a physics rollout (swing eq + governor)
-            # using the PINN's online-adapted H — much more accurate than
-            # linear RoCoF extrapolation, and includes governor recovery.
+            # ── PINN closed-loop trajectory regulation ───────────────────
+            # Run every step while frequency is falling.  The PINN's 60-second
+            # physics rollout already reflects any previously applied actions
+            # (they updated Pm/Pe in the simulator), so the loop is naturally
+            # closed: each call sees the remaining shortfall after prior actions.
             traj = state_B.trajectory_60s
             physics_min_f = min(traj) if traj else state_B.f - abs(state_B.df_dt) * 60
 
-            pinn_early_warning = (
-                physics_min_f  < 49.5          # projected to breach alert band
-                and state_B.df_dt < -0.05      # frequency genuinely falling
-                and state_B.risk_level in ("NORMAL", "WATCH")  # true early warning
-            )
-
-            if pinn_early_warning:
-                intervention_triggered = True
-                pred_actions = self.dispatch.select_predictive_actions(
-                    delta_P_B, physics_min_f
+            if state_B.df_dt < -0.02:   # frequency genuinely falling
+                gov_types = ("coal", "gas_ccgt", "nuclear")
+                thermal = [
+                    s for s in sim_B.get_all_sources()
+                    if s["online"] and s.get("type") in gov_types
+                ]
+                gov_cap_reg      = sum(s["capacity_mw"] for s in thermal)
+                gov_headroom_reg = sum(
+                    max(0.0, s["capacity_mw"] - s.get("current_output_mw", 0))
+                    for s in thermal
                 )
-                for action in pred_actions:
+                gen_ramps = [ev for ev in sim_B._ramp_events
+                             if ev.get("kind") == "generation"]
+                dem_ramps = [ev for ev in sim_B._ramp_events
+                             if ev.get("kind") not in ("generation", "generation_ramp_up")]
+
+                reg_actions = self.dispatch.regulate_on_trajectory(
+                    trajectory=traj,
+                    f0=state_B.f,
+                    Pm_eff=state_B.Pm_eff,
+                    Pe=state_B.Pe,
+                    pinn_model=sim_B.pinn,
+                    gov_cap=gov_cap_reg,
+                    gov_output_init=sim_B._gov_output,
+                    gov_headroom=gov_headroom_reg,
+                    gen_ramp_mw=sum(ev["remaining_mw"] for ev in gen_ramps),
+                    gen_ramp_rate=sum(ev["rate_per_s"]   for ev in gen_ramps),
+                    dem_ramp_mw=sum(ev["remaining_mw"] for ev in dem_ramps),
+                    dem_ramp_rate=sum(ev["rate_per_s"]   for ev in dem_ramps),
+                )
+
+                for action in reg_actions:
                     aid = action["id"]
                     if aid in b_actions_applied:
                         continue
+                    if aid in [p["id"] for p in pending_actions_B]:
+                        continue
+                    intervention_triggered = True
                     lead = action.get("lead_time_s", 0)
-                    if aid not in [p["id"] for p in pending_actions_B]:
-                        pending_actions_B.append({
-                            **action,
-                            "description": f"PINN predictive: {action['description']}",
-                            "scheduled_t": step + int(lead),
-                        })
-                        logger.info(
-                            "PINN predictive action '%s' queued at t=%ds "
-                            "(physics_min_f=%.2f Hz, ΔP=%.0f MW), "
-                            "will apply at t=%ds",
-                            aid, t, physics_min_f, delta_P_B, step + int(lead)
-                        )
+                    pending_actions_B.append({
+                        **action,
+                        "description": (
+                            f"PINN regulation: {action['description']} "
+                            f"(nadir {action['_baseline_nadir_hz']:.2f}→"
+                            f"{action['_predicted_nadir_hz']:.2f} Hz)"
+                        ),
+                        "scheduled_t": step + int(lead),
+                    })
+                    logger.info(
+                        "PINN regulated '%s' queued at t=%ds  "
+                        "predicted nadir %.2f→%.2f Hz (+%.3f Hz),  "
+                        "fires at t=%ds",
+                        aid, t,
+                        action["_baseline_nadir_hz"], action["_predicted_nadir_hz"],
+                        action["_improvement_hz"],
+                        step + int(lead),
+                    )
 
-            # ── Reactive path ────────────────────────────────────────────
-            # Risk score has confirmed the excursion — add fast demand
-            # response (EV shedding) and any CCGTs not yet queued.
+            # ── Reactive fallback: EV shedding only ─────────────────────
+            # The PINN regulation loop handles pre-positioning of all slow
+            # assets.  This path only applies the fastest sub-2-second
+            # action (EV shedding) once the excursion is confirmed, as a
+            # last-resort safety net if the regulation loop hasn't yet fired.
             if state_B.risk_level in ("ALERT", "CRITICAL"):
-                intervention_triggered = True
-                actions = self.dispatch.select_actions(
-                    state_B.risk_score,
-                    state_B.H_physical,
-                    delta_P_B,
-                    state_B.trajectory_60s,
-                )
-
-                for action in actions:
+                for action in self.dispatch.select_actions(
+                    state_B.risk_score, state_B.H_physical,
+                    delta_P_B, state_B.trajectory_60s,
+                ):
                     aid = action["id"]
                     if aid in b_actions_applied:
-                        continue   # already done
-
-                    lead = action.get("lead_time_s", 0)
-                    if lead < 2:   # sub-2-second: EV shedding (1 s)
-                        validation = self.validator.validate(state_B, [action], sim_B)
-                        if validation["approved"]:
-                            sim_B.apply_action(action)
-                            b_actions_applied.add(aid)
-                            actions_this_step.append(action)
-                        else:
-                            logger.info(
-                                "Action '%s' rejected at t=%ds: %s",
-                                aid, t, validation["reject_reason"]
-                            )
-                    else:
-                        # Slow-start actions (CCGT, SC) — schedule if not already queued
-                        if aid not in b_actions_applied and aid not in [
-                            p["id"] for p in pending_actions_B
-                        ]:
-                            pending_actions_B.append({
-                                **action,
-                                "scheduled_t": step + int(lead),
-                            })
-                            logger.info(
-                                "Reactive action '%s' queued, will apply at step %ds",
-                                aid, step + int(lead)
-                            )
+                        continue
+                    if action.get("lead_time_s", 0) >= 2:
+                        continue   # slow assets already handled by regulation loop
+                    validation = self.validator.validate(state_B, [action], sim_B)
+                    if validation["approved"]:
+                        sim_B.apply_action(action)
+                        b_actions_applied.add(aid)
+                        actions_this_step.append(action)
+                        intervention_triggered = True
 
             # Apply any pending lead-time actions that are now ready
             ready = [p for p in pending_actions_B if p.get("scheduled_t", 9999) <= step]
