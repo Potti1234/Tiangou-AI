@@ -117,3 +117,4 @@ The bundle also writes `run_hong_kong_solver_pipeline.ps1` and `grids_solvable.t
 This preview uses OSM geometry, voltage-class impedance and charging defaults, public Hong Kong peak-demand anchors, and territory-level equivalent generators. Treat it as an upstream topology-builder artifact for the Julia relaxation/export pipeline, not as an operational grid model.
 Exported buses, branches, loads, and generators retain `provenance` and `confidence` annotations, with aggregate counts in `_metadata.provenance_summary`, so inferred values can be audited before scenario generation.
 Demand is allocated within each service territory using a voltage-weighted substation proxy and a 0.95 assumed load power factor while preserving the public CLP/HK Electric snapshot totals.
+Generators also carry `energy_source`, `resource_type`, and `cost_class` metadata so tagged local plants and territory-level capacity equivalents remain distinguishable after export.

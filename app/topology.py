@@ -509,6 +509,9 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "provenance": generator.get("provenance"),
             "confidence": generator.get("confidence"),
             "service_territory": generator.get("service_territory"),
+            "energy_source": generator.get("energy_source"),
+            "resource_type": generator.get("resource_type"),
+            "cost_class": generator.get("cost_class"),
         }
 
     return {
@@ -1043,6 +1046,9 @@ def _tagged_generators(generators: Iterable[Mapping[str, Any]]) -> list[dict[str
                 "bus_id": generator["bus_id"],
                 "service_territory": None,
                 "pmax_mw": float(pmax_mw),
+                "energy_source": _normal_generator_source(generator.get("source")),
+                "resource_type": "local_osm_generator",
+                "cost_class": _generator_cost_class(generator.get("source")),
                 "cost": _generator_cost(generator.get("source")),
                 "provenance": generator.get("provenance"),
                 "confidence": generator.get("confidence"),
@@ -1064,6 +1070,37 @@ def _generator_cost(source: Any) -> list[float]:
     if "waste" in source_text:
         return [0.006, 18.0, 0.0]
     return [0.01, 24.0, 0.0]
+
+
+def _normal_generator_source(source: Any) -> str:
+    source_text = str(source or "").lower()
+    for known in ("coal", "gas", "nuclear", "solar", "wind", "waste"):
+        if known in source_text:
+            return known
+    return "unknown"
+
+
+def _generator_cost_class(source: Any) -> str:
+    source_name = _normal_generator_source(source)
+    if source_name in {"solar", "wind"}:
+        return "low_variable_cost_renewable"
+    if source_name == "nuclear":
+        return "low_variable_cost_import_or_nuclear"
+    if source_name == "gas":
+        return "thermal_gas"
+    if source_name == "coal":
+        return "thermal_coal"
+    if source_name == "waste":
+        return "waste_to_energy"
+    return "generic_dispatchable"
+
+
+def _equivalent_generator_cost_class(territory: str) -> str:
+    if territory == "clp":
+        return "territory_equivalent_import_or_local_supply"
+    if territory == "hk-electric":
+        return "island_local_supply_equivalent"
+    return "generic_capacity_equivalent"
 
 
 def _equivalent_generators(
@@ -1088,6 +1125,9 @@ def _equivalent_generators(
                 "bus_id": bus["id"],
                 "service_territory": territory,
                 "pmax_mw": pmax_mw,
+                "energy_source": "equivalent_import_or_local_supply",
+                "resource_type": "territory_capacity_equivalent",
+                "cost_class": _equivalent_generator_cost_class(territory),
                 "cost": [0.01, 20.0 if territory == "clp" else 24.0, 0.0],
                 "provenance": "public_peak_demand_capacity_equivalent",
                 "confidence": 0.35,
@@ -1102,6 +1142,9 @@ def _equivalent_generators(
                 "bus_id": bus["id"],
                 "service_territory": "unassigned",
                 "pmax_mw": 100.0,
+                "energy_source": "fallback_equivalent",
+                "resource_type": "fallback_capacity_equivalent",
+                "cost_class": "fallback",
                 "cost": [0.01, 30.0, 0.0],
                 "provenance": "fallback_capacity_equivalent",
                 "confidence": 0.2,

@@ -73,6 +73,11 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert all(generator["model"] == 2 for generator in case["gen"].values())
     assert all(generator["ncost"] == 3 for generator in case["gen"].values())
     assert all(len(generator["cost"]) == 3 for generator in case["gen"].values())
+    assert all(generator["resource_type"] == "territory_capacity_equivalent" for generator in case["gen"].values())
+    assert {generator["cost_class"] for generator in case["gen"].values()} == {
+        "territory_equivalent_import_or_local_supply",
+        "island_local_supply_equivalent",
+    }
     assert all(bus["provenance"] in {"osm", "osm_branch_endpoint"} for bus in case["bus"].values())
     assert all(branch["parameter_source"] == "osm_with_inferred_parameters" for branch in case["branch"].values())
     assert all(load["provenance"] == "public_peak_demand_scaled_voltage_weighted_substation_split" for load in case["load"].values())
@@ -187,6 +192,9 @@ def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
     tagged_export = next(generator for generator in case["gen"].values() if generator["source_id"] == "gen:node:50")
     assert tagged_export["provenance"] == "osm_capacity_tag"
     assert tagged_export["confidence"] == 0.7
+    assert tagged_export["energy_source"] == "gas"
+    assert tagged_export["resource_type"] == "local_osm_generator"
+    assert tagged_export["cost_class"] == "thermal_gas"
 
 
 def test_powermodels_preview_can_include_hk_intertie() -> None:
