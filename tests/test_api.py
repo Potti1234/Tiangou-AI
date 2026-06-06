@@ -1,5 +1,7 @@
+import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app import main
@@ -146,7 +148,16 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
         )
         analytics_response = client.get(
             "/grid/analytics-dashboard",
-            params={"include_hk_interties": True, "min_voltage_kv": 100.0},
+            params={"include_hk_interties": True},
+        )
+        transmission_analytics_response = client.get(
+            "/grid/analytics-dashboard",
+            params={
+                "include_hk_interties": False,
+                "solver_include_policy": "strict_transmission",
+                "min_voltage_kv": 100.0,
+                "include_synthetic_generator_connections": False,
+            },
         )
 
     assert ingest_response.status_code == 200
@@ -167,6 +178,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert summary_response.status_code == 200
     assert baseline_response.status_code == 200
     assert analytics_response.status_code == 200
+    assert transmission_analytics_response.status_code == 200
     payload = preview_response.json()
     assert payload["baseMVA"] == 100.0
     assert demo_policy_response.json()["_metadata"]["solver_include_policy"] == "demo_full_osm"
@@ -290,6 +302,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     }
     assert analytics_payload["model_parameters"]["include_hk_interties"] is True
     assert analytics_payload["model_parameters"]["solver_include_policy"] == "demo_full_osm"
+    assert analytics_payload["model_parameters"]["min_voltage_kv"] is None
     assert analytics_payload["solver_artifacts"]["latest_raw_powermodels_export"] is None or set(analytics_payload["solver_artifacts"]["latest_raw_powermodels_export"]) >= {
         "status",
         "output_path",
@@ -308,6 +321,81 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
         "branch_count",
     }
     assert "57-bus/63-branch case can export raw PowerModels" in analytics_payload["solver_artifacts"]["feasibility_warning"]
+    transmission_analytics_payload = transmission_analytics_response.json()
+    assert transmission_analytics_payload["model_parameters"]["solver_include_policy"] == "strict_transmission"
+    assert transmission_analytics_payload["model_parameters"]["min_voltage_kv"] == 100.0
+
+
+def test_analytics_dashboard_defaults_to_unfiltered_full_demo(monkeypatch) -> None:
+    captured_params = []
+
+    def fake_build_dashboard_snapshot(params: main.DashboardSnapshotParams) -> dict:
+        captured_params.append(params)
+        return {
+            "params_index": len(captured_params) - 1,
+            "validation": {
+                "metrics": {
+                    "total_pd_mw": 1.0,
+                    "total_pmax_mw": 2.0,
+                }
+            },
+        }
+
+    def fake_analytics_from_snapshot(**kwargs) -> dict:
+        snapshot_params = captured_params[kwargs["snapshot"]["params_index"]]
+        return {
+            "model_parameters": {
+                "include_hk_interties": snapshot_params.include_hk_interties,
+                "min_voltage_kv": snapshot_params.min_voltage_kv,
+                "solver_include_policy": snapshot_params.solver_include_policy,
+            }
+        }
+
+    monkeypatch.setattr(main, "_build_dashboard_snapshot", fake_build_dashboard_snapshot)
+    monkeypatch.setattr(main, "_analytics_from_snapshot", fake_analytics_from_snapshot)
+    monkeypatch.setattr(main, "build_assumption_validation_summary", lambda: {})
+    monkeypatch.setattr(main, "_assumption_tables_payload", lambda: [])
+    monkeypatch.setattr(main, "_important_proxy_markers_for_analytics", lambda region_key, limit=500: [])
+
+    with TestClient(main.app) as client:
+        full_demo_response = client.get("/grid/analytics-dashboard")
+        transmission_response = client.get(
+            "/grid/analytics-dashboard",
+            params={"solver_include_policy": "strict_transmission", "min_voltage_kv": 100.0},
+        )
+
+    assert full_demo_response.status_code == 200
+    assert full_demo_response.json()["model_parameters"] == {
+        "include_hk_interties": True,
+        "min_voltage_kv": None,
+        "solver_include_policy": "demo_full_osm",
+    }
+    assert transmission_response.status_code == 200
+    assert transmission_response.json()["model_parameters"]["solver_include_policy"] == "strict_transmission"
+    assert transmission_response.json()["model_parameters"]["min_voltage_kv"] == 100.0
+    assert len(captured_params) == 6
+
+
+def test_analytics_dashboard_full_demo_matches_raw_export_when_data_present() -> None:
+    manifest_path = Path("data/processed/hong_kong_phase1_manifest.json")
+    if not settings.database_path.exists() or not manifest_path.exists():
+        pytest.skip("Local database and processed manifest are required for the 57/63 full-demo contract check.")
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    latest_raw_export = manifest["exports"][-1]
+    raw_metadata = latest_raw_export["metadata"]
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/grid/analytics-dashboard",
+            params={"include_hk_interties": True, "solver_include_policy": "demo_full_osm"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["model_parameters"]["min_voltage_kv"] is None
+    assert payload["metadata_cards"]["buses"] == raw_metadata["bus_count"] == 57
+    assert payload["metadata_cards"]["branches"] == raw_metadata["branch_count"] == 63
 
 
 def test_consumer_proxy_ingest_endpoint_stores_normalized_rows(tmp_path, monkeypatch) -> None:

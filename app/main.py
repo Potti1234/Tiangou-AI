@@ -1263,7 +1263,7 @@ def analytics_dashboard(
     demand_snapshot: str = Query(default="peak_16h", pattern=DEMAND_SNAPSHOT_PATTERN),
     include_hk_interties: bool = True,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
-    min_voltage_kv: float | None = Query(default=100.0, gt=0.0),
+    min_voltage_kv: float | None = Query(default=None, gt=0.0),
     solver_include_policy: str = Query(default=DEFAULT_SOLVER_INCLUDE_POLICY, pattern=SOLVER_INCLUDE_POLICY_PATTERN),
     min_solver_generator_mw: float = Query(default=DEFAULT_MIN_SOLVER_GENERATOR_MW, ge=0.0),
     include_synthetic_generator_connections: bool = True,
