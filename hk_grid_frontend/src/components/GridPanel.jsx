@@ -129,10 +129,13 @@ export default function GridPanel({
         </div>
       )}
       {isAfter && actions.length > 0 && (
-        <div className="action-banner">
-          <span className="action-icon">⚡</span>
-          {actions.slice(0, 2).join(' · ')}
-          {actions.length > 2 && ` + ${actions.length - 2} more`}
+        <div className="action-log">
+          {actions.map((a, i) => (
+            <div key={i} className="action-log-entry">
+              <span className="action-log-time">t={a.t}s</span>
+              <span className="action-log-text">⚡ {a.text}</span>
+            </div>
+          ))}
         </div>
       )}
 
@@ -169,13 +172,6 @@ export default function GridPanel({
             timeHistory={timeHistory}
             side={side}
           />
-          {isAfter && (
-            <div className="kpi-strip">
-              <span className="kpi-strip-item">🌿 <strong>-{co2Pct}%</strong> CO₂</span>
-              <span className="kpi-strip-item">⚡ <strong>+{renewable}%</strong> renewable</span>
-              <span className="kpi-strip-item">$ <strong>{kpis?.cost_saved_usd ? '$' + (kpis.cost_saved_usd / 1000).toFixed(1) + 'K' : '—'}</strong> saved</span>
-            </div>
-          )}
         </div>
 
         {/* ── physics readouts ─────────────────────── */}

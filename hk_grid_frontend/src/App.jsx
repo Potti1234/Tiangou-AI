@@ -91,7 +91,12 @@ export default function App() {
   const frameA = simData?.frames[frameIdx]?.A ?? null
   const frameB = simData?.frames[frameIdx]?.B ?? null
   const frameT = simData?.frames[frameIdx]?.t ?? 0
-  const actions = simData?.frames[frameIdx]?.actions_taken ?? []
+  // Accumulate all actions up to the current frame so messages stay visible
+  const actions = simData
+    ? simData.frames.slice(0, frameIdx + 1).flatMap(f =>
+        f.actions_taken.map(a => ({ t: f.t, text: a }))
+      )
+    : []
 
   const freqHistA = simData
     ? simData.frames.slice(0, frameIdx + 1).map(f => f.A.f)
