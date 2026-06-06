@@ -320,6 +320,10 @@ function isGenerationAsset(asset: GridAsset) {
   return asset.power === "plant" || asset.power === "generator"
 }
 
+function isSupportAsset(asset: GridAsset) {
+  return asset.power === "tower" || asset.power === "pole" || asset.power === "portal" || asset.power === "insulator"
+}
+
 function reconstructedRouteStyle(branch: TopologyBranch, retainedInSolver: boolean): Pick<RouteLayer, "color" | "width" | "opacity" | "dashArray"> {
   const synthetic = branch.provenance?.includes("public") || branch.id.startsWith("synthetic:")
   const inferredTransformer = branch.provenance === "inferred_multi_voltage_facility_transformer"
@@ -591,6 +595,14 @@ function DiagnosticsPanel({
   const hkTotalSource = unknownRecord(solverCalibration.hk_total_sector_source)
   const territoryValidation = unknownRecord(solverCalibration.territory_total_validation)
   const officialHongKongGwh = officialTotal.official_gwh ?? territoryValidation.emsd_total_gwh
+  const loadAllocation = unknownRecord(summary?.topology_metadata.load_allocation_validation ?? summary?.solver_metadata.load_allocation_validation)
+  const proxyCountBySector = numericRecord(loadAllocation.proxy_count_by_sector)
+  const topLoadedBuses = Array.isArray(loadAllocation.top_buses_by_allocated_demand)
+    ? loadAllocation.top_buses_by_allocated_demand.map(unknownRecord).slice(0, 5)
+    : []
+  const topLoadedSectors = Array.isArray(loadAllocation.top_sectors_by_allocated_demand)
+    ? loadAllocation.top_sectors_by_allocated_demand.map(unknownRecord).slice(0, 5)
+    : []
   const calibrationWarnings = Array.isArray(summary?.solver_metadata.calibration_warnings)
     ? summary.solver_metadata.calibration_warnings.filter((warning): warning is string => typeof warning === "string")
     : []
@@ -724,6 +736,33 @@ function DiagnosticsPanel({
               </div>
             )}
           </div>
+        </section>
+
+        <section className="mt-4">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Proxy allocation</h2>
+          <div className="mt-2 rounded-[4px] border border-zinc-200 bg-white/70 px-2">
+            <MetadataRow label="Method" value={loadAllocation.method} />
+            <MetadataRow label="Proxy share" value={typeof loadAllocation.proxy_allocation_share === "number" ? `${formatNumber(loadAllocation.proxy_allocation_share * 100, 1)}%` : "n/a"} />
+            <MetadataRow label="Fallback share" value={typeof loadAllocation.fallback_allocation_share === "number" ? `${formatNumber(loadAllocation.fallback_allocation_share * 100, 1)}%` : "n/a"} />
+            <MetadataRow label="Average distance km" value={loadAllocation.average_proxy_to_bus_distance_km} />
+            <MetadataRow label="Median distance km" value={loadAllocation.median_proxy_to_bus_distance_km} />
+          </div>
+          <div className="mt-2">
+            <p className="mb-1 text-[11px] font-medium text-zinc-500">Proxy count by sector</p>
+            <CountBadges counts={proxyCountBySector} />
+          </div>
+          {topLoadedBuses.length > 0 && (
+            <div className="mt-2">
+              <p className="mb-1 text-[11px] font-medium text-zinc-500">Top loaded buses</p>
+              <CountBadges counts={Object.fromEntries(topLoadedBuses.map((item) => [String(item.bus_id ?? "unknown"), Number(item.pd_mw ?? 0)]))} />
+            </div>
+          )}
+          {topLoadedSectors.length > 0 && (
+            <div className="mt-2">
+              <p className="mb-1 text-[11px] font-medium text-zinc-500">Top loaded sectors</p>
+              <CountBadges counts={Object.fromEntries(topLoadedSectors.map((item) => [String(item.sector ?? "unknown"), Number(item.pd_mw ?? 0)]))} />
+            </div>
+          )}
         </section>
 
         <section className="mt-4">
@@ -1094,7 +1133,7 @@ function App() {
   }, [assetsWithLocation, caseBusByNumber, caseData, mode, topology])
 
   const pointAssets = useMemo(
-    () => assetsWithLocation.filter((asset) => !isLinearAsset(asset)),
+    () => assetsWithLocation.filter((asset) => !isLinearAsset(asset) && !isSupportAsset(asset)),
     [assetsWithLocation],
   )
 
@@ -1149,8 +1188,7 @@ function App() {
               )
             })}
 
-          {mode !== "raw" &&
-            pointLayers.map((point) => (
+          {pointLayers.map((point) => (
               <MapMarker key={point.id} longitude={point.longitude} latitude={point.latitude}>
                 <MarkerContent>
                   <PointMarker point={point} />
