@@ -448,6 +448,10 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "area": 1,
             "zone": 1,
             "source_id": bus["id"],
+            "provenance": bus.get("provenance"),
+            "confidence": bus.get("confidence"),
+            "service_territory": bus.get("service_territory"),
+            "voltage_band": bus.get("voltage_band"),
         }
 
     branch_dict = {}
@@ -463,6 +467,10 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "qd": round(load["qd_mvar"] / BASE_MVA, 6),
             "status": 1,
             "source_id": load["id"],
+            "provenance": load.get("provenance"),
+            "confidence": load.get("confidence"),
+            "service_territory": load.get("service_territory"),
+            "snapshot": load.get("snapshot"),
         }
 
     gen_dict = {}
@@ -483,6 +491,9 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "model": 2,
             "ncost": 3,
             "cost": generator["cost"],
+            "provenance": generator.get("provenance"),
+            "confidence": generator.get("confidence"),
+            "service_territory": generator.get("service_territory"),
         }
 
     return {
@@ -519,6 +530,12 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "total_tagged_pmax_mw": round(sum(gen["pmax_mw"] for gen in tagged_generators), 3),
             "total_equivalent_pmax_mw": round(sum(gen["pmax_mw"] for gen in equivalent_generators), 3),
             "total_pmax_mw": round(sum(gen["pmax_mw"] for gen in all_generators), 3),
+            "provenance_summary": {
+                "bus": _count_by(buses, "provenance"),
+                "branch": _count_by(branches, "provenance"),
+                "gen": _count_by(all_generators, "provenance"),
+                "load": _count_by(loads, "provenance"),
+            },
             "notes": [
                 "This is a PowerModels handoff preview built from public OSM topology and inferred parameters.",
                 "Equivalent generators represent territory-level local supply or imports; run relaxation and validation before optimization.",
@@ -802,6 +819,11 @@ def _powermodels_branch(
         "angmax": 0.523599,
         "transformer": False,
         "source_id": branch["id"],
+        "provenance": branch.get("provenance"),
+        "confidence": branch.get("confidence"),
+        "parameter_source": branch.get("provenance"),
+        "matched_voltage_kv": defaults.get("matched_voltage_kv"),
+        "length_km": length_km,
     }
 
 
@@ -898,6 +920,8 @@ def _tagged_generators(generators: Iterable[Mapping[str, Any]]) -> list[dict[str
                 "service_territory": None,
                 "pmax_mw": float(pmax_mw),
                 "cost": _generator_cost(generator.get("source")),
+                "provenance": generator.get("provenance"),
+                "confidence": generator.get("confidence"),
             }
         )
     return tagged
@@ -941,6 +965,8 @@ def _equivalent_generators(
                 "service_territory": territory,
                 "pmax_mw": pmax_mw,
                 "cost": [0.01, 20.0 if territory == "clp" else 24.0, 0.0],
+                "provenance": "public_peak_demand_capacity_equivalent",
+                "confidence": 0.35,
             }
         )
 
@@ -953,9 +979,19 @@ def _equivalent_generators(
                 "service_territory": "unassigned",
                 "pmax_mw": 100.0,
                 "cost": [0.01, 30.0, 0.0],
+                "provenance": "fallback_capacity_equivalent",
+                "confidence": 0.2,
             }
         )
     return generators
+
+
+def _count_by(items: Iterable[Mapping[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = str(item.get(key) or "unknown")
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _best_generator_bus(

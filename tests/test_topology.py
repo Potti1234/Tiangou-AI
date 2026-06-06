@@ -61,6 +61,11 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert all(generator["model"] == 2 for generator in case["gen"].values())
     assert all(generator["ncost"] == 3 for generator in case["gen"].values())
     assert all(len(generator["cost"]) == 3 for generator in case["gen"].values())
+    assert all(bus["provenance"] in {"osm", "osm_branch_endpoint"} for bus in case["bus"].values())
+    assert all(branch["parameter_source"] == "osm_with_inferred_parameters" for branch in case["branch"].values())
+    assert all(load["provenance"] == "public_peak_demand_scaled_equal_substation_split" for load in case["load"].values())
+    assert case["_metadata"]["provenance_summary"]["branch"] == {"osm_with_inferred_parameters": 2}
+    assert case["_metadata"]["provenance_summary"]["gen"] == {"public_peak_demand_capacity_equivalent": 2}
     assert sum(load["pd"] for load in case["load"].values()) == 95.91
     assert sum(gen["pmax"] for gen in case["gen"].values()) > 95.91
 
@@ -113,7 +118,9 @@ def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
     assert case["_metadata"]["tagged_gen_count"] == 1
     assert case["_metadata"]["equivalent_gen_count"] == 2
     assert case["_metadata"]["total_tagged_pmax_mw"] == 800.0
-    assert any(generator["source_id"] == "gen:node:50" for generator in case["gen"].values())
+    tagged_export = next(generator for generator in case["gen"].values() if generator["source_id"] == "gen:node:50")
+    assert tagged_export["provenance"] == "osm_capacity_tag"
+    assert tagged_export["confidence"] == 0.7
 
 
 def test_powermodels_preview_can_include_hk_intertie() -> None:
@@ -137,6 +144,9 @@ def test_powermodels_preview_can_include_hk_intertie() -> None:
     assert topology["metadata"]["branch_count"] == 3
     assert intertie["provenance"] == "public_interconnection_capacity_equivalent"
     assert exported_intertie["rate_a"] == 720.0
+    assert exported_intertie["parameter_source"] == "public_interconnection_capacity_equivalent"
+    assert exported_intertie["confidence"] == 0.5
+    assert case["_metadata"]["provenance_summary"]["branch"]["public_interconnection_capacity_equivalent"] == 1
     assert validation["status"] == "ok"
     assert validation["metrics"]["island_count"] == 1
 
