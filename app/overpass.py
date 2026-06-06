@@ -30,13 +30,19 @@ POWER_VALUES = (
 )
 
 
+class OverpassError(RuntimeError):
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 def _quote(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
 def build_power_query(region: Region, timeout_seconds: int = 120) -> str:
     area_blocks = []
-    area_refs = []
+    query_lines = []
     for index, area_name in enumerate(region.area_names):
         ref = f".area{index}"
         escaped_name = _quote(area_name)
@@ -50,22 +56,24 @@ def build_power_query(region: Region, timeout_seconds: int = 120) -> str:
                 )
             )
         )
-        area_refs.append(ref)
 
-    area_union = "\n".join(area_refs)
     power_regex = "|".join(POWER_VALUES)
+    for index in range(len(region.area_names)):
+        area_ref = f"area.area{index}"
+        query_lines.extend(
+            (
+                f'  nwr["power"~"^({power_regex})$"]({area_ref});',
+                f'  nwr["voltage"]({area_ref});',
+                f'  nwr["substation"]({area_ref});',
+                f'  nwr["generator:source"]({area_ref});',
+                f'  nwr["generator:method"]({area_ref});',
+            )
+        )
 
     return f"""[out:json][timeout:{timeout_seconds}];
 {chr(10).join(area_blocks)}
 (
-{area_union}
-)->.searchAreas;
-(
-  nwr["power"~"^({power_regex})$"](area.searchAreas);
-  nwr["voltage"](area.searchAreas);
-  nwr["substation"](area.searchAreas);
-  nwr["generator:source"](area.searchAreas);
-  nwr["generator:method"](area.searchAreas);
+{chr(10).join(query_lines)}
 );
 out body geom;
 """
@@ -82,6 +90,21 @@ class OverpassClient:
 
     async def fetch(self, query: str) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            response = await client.post(self.url, data={"data": query})
-            response.raise_for_status()
+            response = await client.post(
+                self.url,
+                data={"data": query},
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "TiangouAI/0.1 hackathon grid ingestion",
+                },
+            )
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                body = response.text.strip()
+                detail = body[:800] if body else str(exc)
+                raise OverpassError(
+                    f"Overpass returned HTTP {response.status_code}: {detail}",
+                    status_code=response.status_code,
+                ) from exc
             return response.json()

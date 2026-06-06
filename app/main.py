@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import get_db, init_db
-from app.overpass import OverpassClient, build_power_query
+from app.overpass import OverpassClient, OverpassError, build_power_query
 from app.regions import REGIONS, get_region
 from app.repository import (
     complete_ingest_run,
@@ -91,10 +91,14 @@ async def ingest(region_key: str) -> dict[str, Any]:
 
     try:
         payload = await OverpassClient().fetch(query)
+    except OverpassError as exc:
+        with get_db() as conn:
+            complete_ingest_run(conn, ingest_run_id, "failed", 0, str(exc))
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except httpx.HTTPError as exc:
         with get_db() as conn:
             complete_ingest_run(conn, ingest_run_id, "failed", 0, str(exc))
-        raise HTTPException(status_code=502, detail=f"Overpass request failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Overpass network failed: {exc}") from exc
 
     elements = payload.get("elements", [])
     with get_db() as conn:
