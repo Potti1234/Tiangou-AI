@@ -79,6 +79,95 @@ def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
     assert clp_loads["osm:node:2"]["pd_mw"] == 2934.4
 
 
+def test_topology_preview_merges_fragmented_same_voltage_circuits() -> None:
+    rows = [
+        {
+            "osm_type": "node",
+            "osm_id": 100,
+            "power": "substation",
+            "name": "Alpha",
+            "voltage": "132000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.30,
+            "lon": 114.10,
+            "tags_json": '{"operator": "CLP Power", "voltage": "132000"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "node",
+            "osm_id": 101,
+            "power": "substation",
+            "name": "Beta",
+            "voltage": "132000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.32,
+            "lon": 114.12,
+            "tags_json": '{"operator": "CLP Power", "voltage": "132000"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "way",
+            "osm_id": 102,
+            "power": "line",
+            "name": "Alpha midpoint",
+            "voltage": "132000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": "1",
+            "location": None,
+            "lat": 22.305,
+            "lon": 114.105,
+            "tags_json": '{"operator": "CLP Power", "voltage": "132000"}',
+            "geometry_json": '[{"lat": 22.3001, "lon": 114.1001}, {"lat": 22.31, "lon": 114.11}]',
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "way",
+            "osm_id": 103,
+            "power": "line",
+            "name": "Midpoint Beta",
+            "voltage": "132000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": "1",
+            "location": None,
+            "lat": 22.315,
+            "lon": 114.115,
+            "tags_json": '{"operator": "CLP Power", "voltage": "132000"}',
+            "geometry_json": '[{"lat": 22.31, "lon": 114.11}, {"lat": 22.3199, "lon": 114.1199}]',
+            "updated_at": "2026-01-01 00:00:00",
+        },
+    ]
+
+    topology = build_topology_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+
+    assert topology["metadata"]["bus_count"] == 2
+    assert topology["metadata"]["branch_count"] == 1
+    assert topology["metadata"]["merged_circuit_count"] == 1
+    assert topology["metadata"]["merged_segment_count"] == 2
+    merged = topology["branches"][0]
+    assert merged["id"] == "merged:osm:way:102|osm:way:103"
+    assert merged["from_bus_id"] == "osm:node:100"
+    assert merged["to_bus_id"] == "osm:node:101"
+    assert merged["circuit_class"] == "inter_facility"
+    assert merged["merged_source_ids"] == ["osm:way:102", "osm:way:103"]
+    assert case["_metadata"]["branch_count"] == 1
+    assert all(not bus["source_id"].startswith("synthetic:") for bus in case["bus"].values())
+
+
 def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     case = build_powermodels_preview(_sample_rows(), snap_tolerance_km=0.2)
 

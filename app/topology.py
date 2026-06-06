@@ -316,6 +316,147 @@ def _circuit_tags(record: Mapping[str, Any]) -> dict[str, Any]:
     return tags
 
 
+def _merge_fragmented_circuits(branches: list[dict[str, Any]]) -> dict[str, Any]:
+    by_synthetic_endpoint: dict[str, list[int]] = {}
+    for index, branch in enumerate(branches):
+        for endpoint in (branch.get("from_bus_id"), branch.get("to_bus_id")):
+            if isinstance(endpoint, str) and endpoint.startswith("synthetic:"):
+                by_synthetic_endpoint.setdefault(endpoint, []).append(index)
+
+    adjacency: dict[int, set[int]] = {index: set() for index in range(len(branches))}
+    for indexes in by_synthetic_endpoint.values():
+        for left in indexes:
+            for right in indexes:
+                if left == right:
+                    continue
+                if _merge_compatible(branches[left], branches[right]):
+                    adjacency[left].add(right)
+
+    seen: set[int] = set()
+    output: list[dict[str, Any]] = []
+    merged_circuit_count = 0
+    merged_segment_count = 0
+    for index, branch in enumerate(branches):
+        if index in seen:
+            continue
+        stack = [index]
+        group: set[int] = set()
+        while stack:
+            current = stack.pop()
+            if current in group:
+                continue
+            group.add(current)
+            stack.extend(adjacency[current] - group)
+        seen.update(group)
+
+        if len(group) == 1:
+            output.append(branch)
+            continue
+
+        merged = _merged_circuit_branch([branches[item] for item in sorted(group)])
+        if merged is None:
+            output.extend(branches[item] for item in sorted(group))
+            continue
+
+        output.append(merged)
+        merged_circuit_count += 1
+        merged_segment_count += len(group)
+
+    return {
+        "branches": output,
+        "merged_circuit_count": merged_circuit_count,
+        "merged_segment_count": merged_segment_count,
+    }
+
+
+def _merge_compatible(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    return (
+        left.get("power") == right.get("power")
+        and left.get("voltage_kv") == right.get("voltage_kv")
+        and left.get("location") == right.get("location")
+    )
+
+
+def _merged_circuit_branch(group: list[dict[str, Any]]) -> dict[str, Any] | None:
+    endpoint_counts: dict[str, int] = {}
+    endpoint_quality_by_bus: dict[str, Mapping[str, Any]] = {}
+    for branch in group:
+        qualities = list(branch.get("endpoint_quality") or [])
+        for index, endpoint in enumerate((branch.get("from_bus_id"), branch.get("to_bus_id"))):
+            if not isinstance(endpoint, str):
+                return None
+            endpoint_counts[endpoint] = endpoint_counts.get(endpoint, 0) + 1
+            if index < len(qualities):
+                endpoint_quality_by_bus.setdefault(endpoint, qualities[index])
+
+    boundary_endpoints = [
+        endpoint
+        for endpoint, count in endpoint_counts.items()
+        if count == 1 or not endpoint.startswith("synthetic:")
+    ]
+    boundary_endpoints = _unique_strings(boundary_endpoints)
+    if len(boundary_endpoints) != 2:
+        return None
+
+    first = group[0]
+    source_ids = [str(branch["id"]) for branch in group]
+    circuit_candidates = list(first.get("circuit_candidates") or [])
+    circuit_count = max(int(branch.get("circuit_count") or 1) for branch in group)
+    merged = dict(first)
+    merged.update(
+        {
+            "id": "merged:" + "|".join(source_ids),
+            "source": {"merged_source_ids": source_ids},
+            "name": first.get("name") or "Merged circuit",
+            "from_bus_id": boundary_endpoints[0],
+            "to_bus_id": boundary_endpoints[1],
+            "length_km": round(sum(float(branch.get("length_km") or 0.0) for branch in group), 6),
+            "circuit_candidates": circuit_candidates,
+            "circuit_count": circuit_count,
+            "circuit_count_source": "merged_" + str(first.get("circuit_count_source") or "unknown"),
+            "circuit_class": _classify_preview_branch(boundary_endpoints[0], boundary_endpoints[1]),
+            "endpoint_quality": [
+                dict(endpoint_quality_by_bus.get(boundary_endpoints[0], {"snap": "merged_boundary"})),
+                dict(endpoint_quality_by_bus.get(boundary_endpoints[1], {"snap": "merged_boundary"})),
+            ],
+            "provenance": "merged_osm_circuit",
+            "confidence": min(0.75, max(float(branch.get("confidence") or 0.0) for branch in group) + 0.05),
+            "merged_segment_count": len(group),
+            "merged_source_ids": source_ids,
+            "merge_method": "synthetic_junction_union_find_voltage_compatible",
+        }
+    )
+    return merged
+
+
+def _unique_strings(values: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    unique = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
+
+
+def _drop_unreferenced_synthetic_buses(
+    buses: list[dict[str, Any]],
+    branches: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    referenced = {
+        endpoint
+        for branch in branches
+        for endpoint in (branch.get("from_bus_id"), branch.get("to_bus_id"))
+        if isinstance(endpoint, str)
+    }
+    return [
+        bus
+        for bus in buses
+        if not str(bus.get("id", "")).startswith("synthetic:") or bus["id"] in referenced
+    ]
+
+
 def _generator_capacity(tags: Mapping[str, Any]) -> tuple[float | None, str | None]:
     for key in (
         "generator:output:electricity",
@@ -417,7 +558,8 @@ def build_topology_preview(
                 endpoint_bus_ids.append(None)
                 endpoint_quality.append({"snap": "missing_geometry"})
                 continue
-            bus_id, distance = _nearest_bus(buses, point, snap_tolerance_km)
+            snap_candidates = [*buses, *synthetic_buses.values()]
+            bus_id, distance = _nearest_bus(snap_candidates, point, snap_tolerance_km)
             if bus_id is None:
                 synthetic_id = f"synthetic:{record['osm_type']}:{record['osm_id']}:{index}"
                 if synthetic_id not in synthetic_buses:
@@ -437,9 +579,12 @@ def build_topology_preview(
                         "service_territory": record["service_territory"],
                         "provenance": "osm_branch_endpoint",
                         "confidence": 0.35,
-                    }
+                }
                 endpoint_bus_ids.append(synthetic_id)
                 endpoint_quality.append({"snap": "synthetic", "nearest_bus_km": distance})
+            elif str(bus_id).startswith("synthetic:"):
+                endpoint_bus_ids.append(bus_id)
+                endpoint_quality.append({"snap": "matched_synthetic_junction", "distance_km": distance})
             else:
                 endpoint_bus_ids.append(bus_id)
                 endpoint_quality.append({"snap": "matched", "distance_km": distance})
@@ -474,6 +619,9 @@ def build_topology_preview(
         )
 
     buses.extend(synthetic_buses.values())
+    merge_report = _merge_fragmented_circuits(branches)
+    branches = merge_report["branches"]
+    buses = _drop_unreferenced_synthetic_buses(buses, branches)
     if include_hk_interties:
         branches.extend(_hk_intertie_branches(buses, derate=hk_intertie_derate))
     load_allocations = _allocate_loads(buses, demand_snapshot=demand_snapshot)
@@ -502,6 +650,8 @@ def build_topology_preview(
             "circuit_class_counts": circuit_class_counts,
             "circuit_candidate_count": circuit_candidate_count,
             "circuit_count_total": circuit_count_total,
+            "merged_circuit_count": merge_report["merged_circuit_count"],
+            "merged_segment_count": merge_report["merged_segment_count"],
         },
         "buses": buses,
         "branches": branches,
