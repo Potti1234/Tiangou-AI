@@ -664,13 +664,18 @@ def build_topology_preview(
             generators.append(
                 {
                     "id": f"gen:{record['osm_type']}:{record['osm_id']}",
+                    "source_osm_type": record["osm_type"],
+                    "source_osm_id": record["osm_id"],
                     "bus_id": _bus_id_for_voltage_level(base_bus_id, max(record["voltage_kv"]) if record["voltage_kv"] else None, voltage_levels),
                     "name": record.get("name"),
+                    "operator": record.get("operator") or record["tags"].get("operator"),
                     "source": record["tags"].get("generator:source"),
                     "method": record["tags"].get("generator:method"),
                     "pmax_mw": pmax_mw,
                     "capacity_tag": capacity_tag,
+                    "capacity_raw": record["tags"].get(capacity_tag) if capacity_tag else None,
                     "provenance": "osm_capacity_tag" if pmax_mw is not None else "osm_without_capacity",
+                    "provenance_chain": ["osm_capacity_tag"] if pmax_mw is not None else ["osm_without_capacity"],
                     "confidence": 0.7 if pmax_mw is not None else 0.45,
                 }
             )
@@ -997,6 +1002,10 @@ def topology_preview_to_powermodels(
         gen_dict[str(index)] = {
             "index": index,
             "source_id": generator["id"],
+            "source_osm_type": generator.get("source_osm_type"),
+            "source_osm_id": generator.get("source_osm_id"),
+            "name": generator.get("name"),
+            "operator": generator.get("operator"),
             "gen_bus": int(bus_id_map[generator["bus_id"]]),
             "pg": 0.0,
             "qg": 0.0,
@@ -1011,12 +1020,14 @@ def topology_preview_to_powermodels(
             "ncost": 3,
             "cost": generator["cost"],
             "provenance": generator.get("provenance"),
+            "provenance_chain": generator.get("provenance_chain"),
             "confidence": generator.get("confidence"),
             "service_territory": generator.get("service_territory"),
             "energy_source": generator.get("energy_source"),
             "resource_type": generator.get("resource_type"),
             "cost_class": generator.get("cost_class"),
             "capacity_tag": generator.get("capacity_tag"),
+            "capacity_raw": generator.get("capacity_raw"),
             "connection_method": generator.get("connection_method"),
             "assigned_bus_id": generator.get("assigned_bus_id"),
             "original_bus_id": generator.get("original_bus_id"),
@@ -1257,6 +1268,7 @@ def _promote_generators_to_active_buses(
         if generator["bus_id"] in active_bus_ids:
             promoted = dict(generator)
             promoted["connection_method"] = "existing_solver_bus"
+            promoted["provenance_chain"] = _unique_strings([*promoted.get("provenance_chain", []), str(promoted.get("provenance") or "unknown")])
             promoted_generators.append(promoted)
             continue
 
@@ -1278,6 +1290,7 @@ def _promote_generators_to_active_buses(
         promoted["assigned_bus_id"] = assigned_bus["id"]
         promoted["original_bus_id"] = generator["bus_id"]
         promoted["provenance"] = "inferred_generator_connection"
+        promoted["provenance_chain"] = _unique_strings([*promoted.get("provenance_chain", []), "inferred_generator_connection", "synthetic_connection_to_nearest_substation"])
         promoted["confidence"] = min(float(generator.get("confidence") or 0.0), 0.55)
         promoted_generators.append(promoted)
 
@@ -2951,7 +2964,11 @@ def _tagged_generators(
         tagged.append(
             {
                 "id": generator["id"],
+                "source_osm_type": generator.get("source_osm_type"),
+                "source_osm_id": generator.get("source_osm_id"),
                 "bus_id": generator["bus_id"],
+                "name": generator.get("name"),
+                "operator": generator.get("operator"),
                 "service_territory": None,
                 "pmax_mw": float(pmax_mw),
                 "energy_source": _normal_generator_source(generator.get("source")),
@@ -2961,8 +2978,10 @@ def _tagged_generators(
                 "pmin_fraction": fuel_defaults["pmin_fraction"],
                 "power_factor": fuel_defaults["power_factor"],
                 "provenance": generator.get("provenance"),
+                "provenance_chain": generator.get("provenance_chain"),
                 "confidence": generator.get("confidence"),
                 "capacity_tag": generator.get("capacity_tag"),
+                "capacity_raw": generator.get("capacity_raw"),
                 "connection_method": "preview_bus",
             }
         )

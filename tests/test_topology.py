@@ -803,6 +803,12 @@ def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
     assert case["_metadata"]["total_tagged_pmax_mw"] == 800.0
     tagged_export = next(generator for generator in case["gen"].values() if generator["source_id"] == "gen:node:50")
     assert tagged_export["provenance"] == "osm_capacity_tag"
+    assert tagged_export["provenance_chain"] == ["osm_capacity_tag"]
+    assert tagged_export["name"] == "Tagged Gas Plant"
+    assert tagged_export["operator"] == "CLP Power"
+    assert tagged_export["source_osm_type"] == "node"
+    assert tagged_export["source_osm_id"] == 50
+    assert tagged_export["capacity_raw"] == "800 MW"
     assert tagged_export["confidence"] == 0.7
     assert tagged_export["energy_source"] == "gas"
     assert tagged_export["resource_type"] == "local_osm_generator"
@@ -1053,8 +1059,18 @@ def test_demo_full_osm_promotes_lamma_generators_with_synthetic_connections() ->
     lamma_power = next(generator for generator in case["gen"].values() if generator["source_id"] == "gen:way:246974322")
     assert lamma_power["pmax"] == 37.36
     assert lamma_power["capacity_tag"] == "plant:output:electricity"
+    assert lamma_power["capacity_raw"] == "3736 MW"
+    assert lamma_power["name"] == "Lamma Power Station"
+    assert lamma_power["operator"] == "HK Electric"
+    assert lamma_power["source_osm_type"] == "way"
+    assert lamma_power["source_osm_id"] == 246974322
     assert lamma_power["connection_method"] == "synthetic_connection_to_nearest_substation"
     assert lamma_power["provenance"] == "inferred_generator_connection"
+    assert lamma_power["provenance_chain"] == [
+        "osm_capacity_tag",
+        "inferred_generator_connection",
+        "synthetic_connection_to_nearest_substation",
+    ]
     assert lamma_power["gen_bus"] in {bus["bus_i"] for bus in case["bus"].values()}
 
     lamma_winds = [

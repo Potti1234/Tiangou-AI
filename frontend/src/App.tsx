@@ -145,9 +145,15 @@ type PowerModelsGen = {
   pmax: number
   resource_type: string
   provenance: string | null
+  provenance_chain?: string[] | null
   service_territory: string | null
+  name?: string | null
+  operator?: string | null
+  source_osm_type?: string | null
+  source_osm_id?: number | null
   energy_source?: string | null
   capacity_tag?: string | null
+  capacity_raw?: string | null
   confidence?: number | null
   connection_method?: string | null
   assigned_bus_id?: string | null
@@ -1221,7 +1227,7 @@ function App() {
       const equivalent = gen.resource_type.includes("equivalent")
       points.push({
         id: `gen-${id}`,
-        label: equivalent ? gen.resource_type : (gen.energy_source ? `${gen.energy_source} generator` : "OSM generator"),
+        label: gen.name ?? (equivalent ? gen.resource_type : (gen.energy_source ? `${gen.energy_source} generator` : "OSM generator")),
         longitude: coord[0],
         latitude: coord[1],
         color: equivalent ? "#2563eb" : gen.provenance === "inferred_generator_connection" ? "#7c2d12" : "#111827",
@@ -1229,11 +1235,15 @@ function App() {
         icon: equivalent ? Database : gen.energy_source === "wind" ? Zap : Factory,
         meta: [
           ["Layer", "Solver generator"],
+          ["Name", gen.name ?? "n/a"],
           ["Pmax MW", formatNumber(pmaxMw, pmaxMw < 10 ? 2 : 1)],
           ["Source", gen.energy_source ?? "n/a"],
+          ["Operator", gen.operator ?? "n/a"],
           ["Capacity tag", gen.capacity_tag ?? "n/a"],
+          ["Capacity raw", gen.capacity_raw ?? "n/a"],
           ["Connection", gen.connection_method ?? "direct"],
           ["Provenance", gen.provenance ?? "n/a"],
+          ["Provenance chain", gen.provenance_chain?.join(", ") ?? "n/a"],
           ["Confidence", gen.confidence === null || gen.confidence === undefined ? "n/a" : formatNumber(gen.confidence, 2)],
           ["Bus", String(gen.gen_bus)],
         ],
