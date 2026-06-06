@@ -19,6 +19,7 @@ const SOURCE_NODE_MAP = {
   'HK Offshore Wind Beta':       'offshore',
   'HK Solar Array':              'solar',
   'SC Unit 1':                   'sc',
+  'HK Grid Battery Storage':     'bess',
 }
 
 const NODES = [
@@ -29,6 +30,7 @@ const NODES = [
   { id: 'lamma',        label: 'Lamma PS',             x:  90, y: 310, type: 'coal'    },
   { id: 'solar',        label: 'HK Solar',             x: 370, y: 240, type: 'solar'   },
   { id: 'sc',           label: 'Stonecutters\nSC',     x: 245, y: 190, type: 'sc'      },
+  { id: 'bess',         label: 'Grid Battery\nBESS',   x: 310, y: 290, type: 'bess'    },
 ]
 
 const EDGES = [
@@ -39,11 +41,12 @@ const EDGES = [
   ['sc',          'solar'],
   ['sc',          'lamma'],
   ['solar',       'daya_bay'],
+  ['sc',          'bess'],
 ]
 
 const TYPE_ICON = {
   gas: '⚡', coal: '⚡', nuclear: '⚛', wind: '🌬',
-  solar: '☀', sc: '◎',
+  solar: '☀', sc: '◎', bess: '🔋',
 }
 
 const HK_OUTLINE = `
@@ -59,7 +62,7 @@ const HK_ISLANDS = `
 /* Default fallback data when activeSources not yet loaded */
 const DEFAULT_CAPACITIES = {
   black_point: 1200, castle_peak: 600, daya_bay: 1200,
-  offshore: 1400, lamma: 1400, solar: 500, sc: 0,
+  offshore: 1400, lamma: 1400, solar: 500, sc: 0, bess: 200,
 }
 
 export default function HKMap({ side, freq = 50, activeSources = [] }) {
