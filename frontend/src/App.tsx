@@ -79,7 +79,7 @@ type TopologyBranch = {
 }
 
 type TopologyPreview = {
-  metadata: Record<string, number | string | boolean | null>
+  metadata: Record<string, unknown>
   quality: Record<string, unknown>
   buses: TopologyBus[]
   branches: TopologyBranch[]
@@ -112,6 +112,12 @@ type PowerModelsLoad = {
   pd: number
   qd: number
   service_territory: string | null
+  district?: string | null
+  sector?: string | null
+  provenance?: string | null
+  source_year?: number | null
+  source_period?: string | null
+  source_energy_gwh?: number | null
 }
 
 type PowerModelsGen = {
@@ -134,7 +140,7 @@ type ValidationPayload = {
   status: StageStatus
   errors: Array<Record<string, unknown>>
   warnings: Array<Record<string, unknown>>
-  metrics: Record<string, number | Record<string, number>>
+  metrics: Record<string, unknown>
   voltage_mismatches: Array<{ source_id?: string | null }>
 }
 
@@ -298,6 +304,33 @@ function metadataRecord(source: Record<string, unknown> | undefined, key: string
   return value as Record<string, number>
 }
 
+function unknownRecord(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  return value as Record<string, unknown>
+}
+
+function numericRecord(value: unknown) {
+  const record = unknownRecord(value)
+  return Object.fromEntries(
+    Object.entries(record).filter((entry): entry is [string, number] => typeof entry[1] === "number"),
+  )
+}
+
+function provenanceClass(provenance: string | null | undefined) {
+  if (provenance?.startsWith("observed")) return "observed"
+  if (provenance?.startsWith("inferred")) return "inferred"
+  if (provenance?.startsWith("synthetic")) return "synthetic"
+  return "unknown"
+}
+
+function provenanceColor(provenance: string | null | undefined) {
+  const className = provenanceClass(provenance)
+  if (className === "observed") return "#15803d"
+  if (className === "inferred") return "#2563eb"
+  if (className === "synthetic") return "#a16207"
+  return "#71717a"
+}
+
 function MetadataRow({ label, value }: { label: string; value: unknown }) {
   return (
     <div className="flex items-baseline justify-between gap-4 border-b border-zinc-200/70 py-1.5 text-xs">
@@ -386,6 +419,16 @@ function DiagnosticsPanel({
     metadataRecord(summary?.solver_metadata, "provenance_summary"),
     "branch",
   )
+  const solverCalibration = unknownRecord(summary?.solver_metadata.calibration)
+  const validationCalibration = unknownRecord(summary?.validation.metrics.calibration)
+  const sectorGwh = numericRecord(solverCalibration.sector_gwh)
+  const endUseShares = numericRecord(solverCalibration.end_use_shares)
+  const snapshotTotals = numericRecord(solverCalibration.snapshot_total_mw)
+  const provenanceShares = numericRecord(unknownRecord(validationCalibration.load_provenance_class_share))
+  const hkTerritory = unknownRecord(validationCalibration.hk_electric_territory)
+  const calibrationWarnings = Array.isArray(summary?.solver_metadata.calibration_warnings)
+    ? summary.solver_metadata.calibration_warnings.filter((warning): warning is string => typeof warning === "string")
+    : []
 
   return (
     <aside className="absolute bottom-3 right-3 top-3 z-[2] flex w-[390px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-[6px] border border-zinc-300 bg-[#fbfbfa]/95 shadow-[0_22px_70px_-42px_rgba(24,24,27,0.75)]">
@@ -439,6 +482,46 @@ function DiagnosticsPanel({
             <MetadataRow label="Severe mismatches" value={metric(summary, "severe_branch_voltage_mismatch_count")} />
             <MetadataRow label="Dropped passive buses" value={summary?.solver_metadata.dropped_passive_bus_count} />
             <MetadataRow label="Dropped non-OPF branches" value={summary?.solver_metadata.dropped_non_interfacility_branch_count} />
+          </div>
+        </section>
+
+        <section className="mt-4">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Calibration</h2>
+          <div className="mt-2 rounded-[4px] border border-zinc-200 bg-white/70 px-2">
+            <MetadataRow label="HK Electric source" value={solverCalibration.source_year} />
+            <MetadataRow label="Source periods" value={Array.isArray(solverCalibration.source_periods) ? solverCalibration.source_periods.join(", ") : "n/a"} />
+            <MetadataRow label="Observed HKE GWh" value={solverCalibration.observed_hk_electric_total_gwh} />
+            <MetadataRow label="Modeled HKE GWh" value={hkTerritory.modeled_gwh} />
+            <MetadataRow label="HKE total error %" value={hkTerritory.error_pct} />
+            <MetadataRow label="Cooling share" value={typeof endUseShares.air_conditioning === "number" ? `${formatNumber(endUseShares.air_conditioning * 100, 1)}%` : "n/a"} />
+            <MetadataRow label="Snapshot MW" value={snapshotTotals[summary?.solver_metadata.demand_snapshot as string] ?? summary?.solver_metadata.total_pd_mw} />
+          </div>
+          <div className="mt-2 space-y-2">
+            <div>
+              <p className="mb-1 text-[11px] font-medium text-zinc-500">Observed sector energy (GWh)</p>
+              <CountBadges counts={sectorGwh} />
+            </div>
+            <div>
+              <p className="mb-1 text-[11px] font-medium text-zinc-500">Load provenance share</p>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(["observed", "inferred", "synthetic"] as const).map((item) => (
+                  <div key={item} className="rounded-[4px] border border-zinc-200 bg-white/70 p-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="size-2 rounded-full" style={{ backgroundColor: provenanceColor(item) }} />
+                      <span className="text-[11px] font-medium capitalize text-zinc-600">{item}</span>
+                    </div>
+                    <p className="mt-1 text-sm font-semibold tabular-nums text-zinc-950">
+                      {formatNumber((provenanceShares[item] ?? 0) * 100, 1)}%
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {calibrationWarnings.length > 0 && (
+              <div className="rounded-[4px] border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs leading-5 text-amber-900">
+                {calibrationWarnings[0]}
+              </div>
+            )}
           </div>
         </section>
 
@@ -715,10 +798,17 @@ function App() {
         label: `${load.service_territory ?? "unknown"} load`,
         longitude: coord[0],
         latitude: coord[1],
-        color: "#7c3aed",
+        color: provenanceColor(load.provenance),
         size: Math.max(12, Math.min(34, 10 + Math.sqrt(pdMw) / 2)),
         icon: CircleDot,
-        meta: [["MW", formatNumber(pdMw, 1)], ["Bus", String(load.load_bus)]],
+        meta: [
+          ["MW", formatNumber(pdMw, 1)],
+          ["Bus", String(load.load_bus)],
+          ["Sector", load.sector ?? "aggregate"],
+          ["District", load.district ?? "n/a"],
+          ["Provenance", provenanceClass(load.provenance)],
+          ["Source year", load.source_year ? String(load.source_year) : "n/a"],
+        ],
       })
     }
 
