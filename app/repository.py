@@ -199,6 +199,64 @@ def list_consumer_proxy_elements(
     ).fetchall()
 
 
+def list_consumer_proxy_allocation_rows(
+    conn: sqlite3.Connection,
+    *,
+    region_key: str,
+    limit: int = 100000,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT sector, proxy_type, weight, confidence, lat, lon
+        FROM consumer_proxy_elements
+        WHERE region_key = ?
+          AND lat IS NOT NULL
+          AND lon IS NOT NULL
+          AND weight > 0
+        ORDER BY rowid
+        LIMIT ? OFFSET ?
+        """,
+        (region_key, limit, offset),
+    ).fetchall()
+
+
+def list_consumer_proxy_marker_rows(
+    conn: sqlite3.Connection,
+    *,
+    region_key: str,
+    limit: int = 10000,
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT osm_type, osm_id, region_key, proxy_type, sector, weight, confidence,
+               name, tags_json, lat, lon
+        FROM consumer_proxy_elements
+        WHERE region_key = ?
+          AND lat IS NOT NULL
+          AND lon IS NOT NULL
+        ORDER BY weight DESC, proxy_type, osm_type, osm_id
+        LIMIT ?
+        """,
+        (region_key, limit),
+    ).fetchall()
+
+
+def consumer_proxy_signature(conn: sqlite3.Connection, region_key: str) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS count, MAX(updated_at) AS latest_updated_at
+        FROM consumer_proxy_elements
+        WHERE region_key = ?
+        """,
+        (region_key,),
+    ).fetchone()
+    return {
+        "count": int(row["count"] or 0),
+        "latest_updated_at": row["latest_updated_at"],
+    }
+
+
 def list_elements(
     conn: sqlite3.Connection,
     *,

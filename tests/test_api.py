@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.config import settings
-from app.repository import create_ingest_run
+from app.repository import create_ingest_run, list_consumer_proxy_allocation_rows
 
 
 def test_health_initializes_database(tmp_path, monkeypatch) -> None:
@@ -99,6 +99,10 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
 
     with TestClient(main.app) as client:
         ingest_response = client.post("/ingest/hong-kong")
+        dashboard_response = client.get(
+            "/grid/dashboard-snapshot",
+            params={"include_hk_interties": True, "min_voltage_kv": 100.0},
+        )
         preview_response = client.get("/grid/topology/powermodels-preview")
         overnight_response = client.get(
             "/grid/topology/powermodels-preview",
@@ -132,6 +136,10 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
         )
 
     assert ingest_response.status_code == 200
+    assert dashboard_response.status_code == 200
+    dashboard_payload = dashboard_response.json()
+    assert set(dashboard_payload) >= {"assets", "topology", "powermodels_case", "summary"}
+    assert dashboard_payload["summary"]["stage_status"]["solver_topology"] == "complete"
     assert preview_response.status_code == 200
     assert overnight_response.status_code == 200
     assert cooling_response.status_code == 200
@@ -226,14 +234,19 @@ def test_consumer_proxy_ingest_endpoint_stores_normalized_rows(tmp_path, monkeyp
     with TestClient(main.app) as client:
         ingest_response = client.post("/ingest/hong-kong-consumer-proxies")
         proxies_response = client.get("/grid/consumer-proxies", params={"region_key": "hong-kong"})
+        important_response = client.get("/grid/consumer-proxies/important", params={"region_key": "hong-kong"})
 
     assert ingest_response.status_code == 200
     assert ingest_response.json()["stored_count"] >= 1
     assert proxies_response.status_code == 200
+    assert important_response.status_code == 200
     proxy = proxies_response.json()[0]
     assert proxy["sector"] == "residential"
     assert proxy["proxy_type"] == "building"
     assert proxy["weight"] > 0
+    with main.get_db() as conn:
+        allocation_row = dict(list_consumer_proxy_allocation_rows(conn, region_key="hong-kong")[0])
+    assert set(allocation_row) == {"sector", "proxy_type", "weight", "confidence", "lat", "lon"}
 
 
 def test_pipeline_summary_reports_running_ingest_stage(tmp_path, monkeypatch) -> None:

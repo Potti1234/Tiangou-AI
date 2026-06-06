@@ -2830,11 +2830,13 @@ def _allocate_loads(
 ) -> list[dict[str, Any]]:
     snapshot = _demand_snapshot(demand_snapshot, calibration)
     proxies = list(consumer_proxies or [])
+    proxy_assignments = _prepare_proxy_assignment_buckets(buses, proxies)
     loads = _allocate_hk_electric_observed_loads(
         buses,
         demand_snapshot=demand_snapshot,
         calibration=calibration,
         consumer_proxies=proxies,
+        proxy_assignments=proxy_assignments,
     )
     if calibration is not None and calibration.clp_inference_method:
         loads.extend(
@@ -2843,6 +2845,7 @@ def _allocate_loads(
                 demand_snapshot=demand_snapshot,
                 calibration=calibration,
                 consumer_proxies=proxies,
+                proxy_assignments=proxy_assignments,
             )
         )
     else:
@@ -2906,6 +2909,7 @@ def _proxy_allocated_sector_loads(
     source_periods: list[str] | None = None,
     inference_method: str | None = None,
     confidence: float = 0.65,
+    proxy_assignments: dict[tuple[str, str, str], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     eligible = _eligible_load_buses(buses, territory)
     if not eligible:
@@ -2913,41 +2917,17 @@ def _proxy_allocated_sector_loads(
         eligible = [fallback] if fallback is not None else []
     if not eligible:
         return []
-    sector_proxies = [
-        proxy
-        for proxy in proxies
-        if proxy.get("sector") == sector
-        and proxy.get("lat") is not None
-        and proxy.get("lon") is not None
-        and float(proxy.get("weight") or 0.0) > 0
-        and _nearest_proxy_service_territory(buses, (float(proxy["lat"]), float(proxy["lon"]))) == territory
-    ]
-    if not sector_proxies:
-        return []
+    if proxy_assignments is None:
+        proxy_assignments = _prepare_proxy_assignment_buckets(buses, proxies, default_confidence=confidence)
 
-    assignments: dict[str, dict[str, Any]] = {}
-    for proxy in sector_proxies:
-        bus, distance_km = _nearest_load_bus(eligible, (float(proxy["lat"]), float(proxy["lon"])))
-        if bus is None or distance_km is None:
-            continue
-        bucket = assignments.setdefault(
-            bus["id"],
-            {
-                "bus": bus,
-                "proxy_count": 0,
-                "proxy_total_weight": 0.0,
-                "weighted_distance_km": 0.0,
-                "distances": [],
-                "confidence_weight": 0.0,
-            },
-        )
-        weight = float(proxy["weight"])
-        proxy_confidence = float(proxy.get("confidence") or confidence)
-        bucket["proxy_count"] += 1
-        bucket["proxy_total_weight"] += weight
-        bucket["weighted_distance_km"] += distance_km * weight
-        bucket["distances"].append(distance_km)
-        bucket["confidence_weight"] += proxy_confidence * weight
+    assignments = {
+        bus_id: bucket
+        for bucket_key, bucket in proxy_assignments.items()
+        for bucket_territory, bucket_sector, bus_id in [bucket_key]
+        if bucket_territory == territory and bucket_sector == sector
+    }
+    if not assignments:
+        return []
     total_weight = sum(bucket["proxy_total_weight"] for bucket in assignments.values())
     if total_weight <= 0.0:
         return []
@@ -2994,6 +2974,72 @@ def _proxy_allocated_sector_loads(
     return loads
 
 
+def _prepare_proxy_assignment_buckets(
+    buses: list[dict[str, Any]],
+    proxies: list[Mapping[str, Any]],
+    *,
+    default_confidence: float = 0.65,
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    eligible_by_territory: dict[str, list[dict[str, Any]]] = {}
+    for territory in ("clp", "hk-electric"):
+        eligible = _eligible_load_buses(buses, territory)
+        if not eligible:
+            fallback = _fallback_load_bus(buses, territory)
+            eligible = [fallback] if fallback is not None else []
+        eligible_by_territory[territory] = [
+            bus
+            for bus in eligible
+            if bus is not None and bus.get("lat") is not None and bus.get("lon") is not None
+        ]
+
+    candidates = [
+        (territory, bus)
+        for territory, eligible in eligible_by_territory.items()
+        for bus in eligible
+    ]
+    if not candidates:
+        return {}
+
+    assignments: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for proxy in proxies:
+        sector = proxy.get("sector")
+        if not sector or proxy.get("lat") is None or proxy.get("lon") is None:
+            continue
+        weight = float(proxy.get("weight") or 0.0)
+        if weight <= 0.0:
+            continue
+        point = (float(proxy["lat"]), float(proxy["lon"]))
+        territory, bus, distance_km = min(
+            (
+                (
+                    territory,
+                    bus,
+                    _haversine_km(point, (float(bus["lat"]), float(bus["lon"]))),
+                )
+                for territory, bus in candidates
+            ),
+            key=lambda item: (item[2], -_load_allocation_weight(item[1])),
+        )
+        bucket = assignments.setdefault(
+            (territory, str(sector), bus["id"]),
+            {
+                "bus": bus,
+                "proxy_count": 0,
+                "proxy_total_weight": 0.0,
+                "weighted_distance_km": 0.0,
+                "distances": [],
+                "confidence_weight": 0.0,
+            },
+        )
+        proxy_confidence = float(proxy.get("confidence") or default_confidence)
+        bucket["proxy_count"] += 1
+        bucket["proxy_total_weight"] += weight
+        bucket["weighted_distance_km"] += distance_km * weight
+        bucket["distances"].append(distance_km)
+        bucket["confidence_weight"] += proxy_confidence * weight
+    return assignments
+
+
 def _nearest_load_bus(eligible: list[dict[str, Any]], point: tuple[float, float]) -> tuple[dict[str, Any] | None, float | None]:
     candidates = [
         (bus, _haversine_km(point, (float(bus["lat"]), float(bus["lon"]))))
@@ -3027,6 +3073,7 @@ def _allocate_hk_electric_observed_loads(
     demand_snapshot: str,
     calibration: CalibrationBundle | None,
     consumer_proxies: list[Mapping[str, Any]] | None = None,
+    proxy_assignments: dict[tuple[str, str, str], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if calibration is None:
         return []
@@ -3056,6 +3103,7 @@ def _allocate_hk_electric_observed_loads(
             source_period="annual" if not calibration.is_partial_year else "partial_year",
             source_periods=calibration.source_periods,
             confidence=0.68,
+            proxy_assignments=proxy_assignments,
         )
         if proxy_loads:
             loads.extend(proxy_loads)
@@ -3153,6 +3201,7 @@ def _allocate_inferred_clp_loads(
     demand_snapshot: str,
     calibration: CalibrationBundle,
     consumer_proxies: list[Mapping[str, Any]] | None = None,
+    proxy_assignments: dict[tuple[str, str, str], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     territory = "clp"
     eligible = _eligible_load_buses(buses, territory)
@@ -3194,6 +3243,7 @@ def _allocate_inferred_clp_loads(
             source_periods=calibration.source_periods,
             inference_method=calibration.clp_inference_method,
             confidence=0.58,
+            proxy_assignments=proxy_assignments,
         )
         if proxy_loads:
             loads.extend(proxy_loads)

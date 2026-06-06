@@ -72,6 +72,8 @@ CREATE INDEX IF NOT EXISTS idx_osm_elements_name ON osm_elements(name);
 CREATE INDEX IF NOT EXISTS idx_osm_elements_voltage ON osm_elements(voltage);
 CREATE INDEX IF NOT EXISTS idx_element_regions_region ON element_regions(region_key);
 CREATE INDEX IF NOT EXISTS idx_consumer_proxy_region_sector ON consumer_proxy_elements(region_key, sector);
+CREATE INDEX IF NOT EXISTS idx_consumer_proxy_region_type ON consumer_proxy_elements(region_key, proxy_type);
+CREATE INDEX IF NOT EXISTS idx_consumer_proxy_region_sector_type ON consumer_proxy_elements(region_key, sector, proxy_type);
 """
 
 

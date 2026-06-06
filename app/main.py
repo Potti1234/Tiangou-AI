@@ -1,6 +1,8 @@
 import json
+from dataclasses import dataclass
 from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 import httpx
@@ -15,10 +17,13 @@ from app.overpass import OverpassClient, OverpassError, build_consumer_proxy_que
 from app.regions import REGIONS, get_region
 from app.repository import (
     complete_ingest_run,
+    consumer_proxy_signature,
     create_ingest_run,
     get_element,
     latest_ingest_run,
+    list_consumer_proxy_allocation_rows,
     list_consumer_proxy_elements,
+    list_consumer_proxy_marker_rows,
     list_elements,
     summarize,
     upsert_consumer_proxy_elements,
@@ -43,6 +48,21 @@ HANDOFF_ARTIFACT_PATHS = {
     "pyg_json": "data/processed/hong_kong_16h_model.pyg.json",
     "scenarios": "data/processed/scenarios",
 }
+
+
+@dataclass(frozen=True)
+class DashboardSnapshotParams:
+    region_key: str
+    snap_tolerance_km: float
+    demand_snapshot: str
+    include_hk_interties: bool
+    hk_intertie_derate: float
+    min_voltage_kv: float | None
+    asset_limit: int = 5000
+
+
+_DASHBOARD_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+_DASHBOARD_CACHE_LOCK = RLock()
 
 
 @asynccontextmanager
@@ -97,6 +117,194 @@ def _handoff_artifact_summary() -> dict[str, Any]:
         "paths": HANDOFF_ARTIFACT_PATHS,
         "exists": exists,
     }
+
+
+def _latest_ingest_payload(row: Any) -> dict[str, Any] | None:
+    return dict(row) if row is not None else None
+
+
+def _dashboard_cache_key(params: DashboardSnapshotParams, latest_ingest: Any, proxy_status: dict[str, Any]) -> tuple[Any, ...]:
+    latest_ingest_payload = _latest_ingest_payload(latest_ingest)
+    ingest_signature = None
+    if latest_ingest_payload is not None:
+        ingest_signature = (
+            latest_ingest_payload["id"],
+            latest_ingest_payload["status"],
+            latest_ingest_payload["completed_at"],
+        )
+    return (
+        str(settings.database_path),
+        params.region_key,
+        params.snap_tolerance_km,
+        params.demand_snapshot,
+        params.include_hk_interties,
+        params.hk_intertie_derate,
+        params.min_voltage_kv,
+        params.asset_limit,
+        ingest_signature,
+        proxy_status["count"],
+        proxy_status["latest_updated_at"],
+    )
+
+
+def _pipeline_summary_payload(
+    *,
+    params: DashboardSnapshotParams,
+    rows: list[Any],
+    topology: dict[str, Any],
+    case: dict[str, Any],
+    validation: dict[str, Any],
+    diagnostics: dict[str, Any],
+    reconciliation: dict[str, Any],
+    latest_ingest_payload: dict[str, Any] | None,
+    consumer_proxy_count: int,
+    handoff_artifacts: dict[str, Any],
+) -> dict[str, Any]:
+    raw_counts = {}
+    for row in rows:
+        power = row["power"]
+        raw_counts[power] = raw_counts.get(power, 0) + 1
+
+    stage_status = {
+        "raw_osm": "complete" if rows else "not_run",
+        "reconstructed_circuits": "complete" if topology["metadata"]["branch_count"] else "warning",
+        "solver_topology": "complete" if case["_metadata"]["bus_count"] else "not_run",
+        "validation": validation["status"],
+        "handoff_artifacts": handoff_artifacts["status"],
+    }
+    if latest_ingest_payload and latest_ingest_payload["status"] == "running":
+        stage_status.update(
+            {
+                "raw_osm": "running",
+                "reconstructed_circuits": "running",
+                "solver_topology": "running",
+                "validation": "running",
+            }
+        )
+    elif latest_ingest_payload and latest_ingest_payload["status"] == "failed" and not rows:
+        stage_status["raw_osm"] = "error"
+    if not rows:
+        stage_status["reconstructed_circuits"] = "not_run"
+        stage_status["validation"] = "not_run"
+        if latest_ingest_payload and latest_ingest_payload["status"] == "running":
+            stage_status["reconstructed_circuits"] = "running"
+            stage_status["validation"] = "running"
+
+    return {
+        "region_key": params.region_key,
+        "parameters": {
+            "snap_tolerance_km": params.snap_tolerance_km,
+            "demand_snapshot": params.demand_snapshot,
+            "include_hk_interties": params.include_hk_interties,
+            "hk_intertie_derate": params.hk_intertie_derate,
+            "min_voltage_kv": params.min_voltage_kv,
+        },
+        "stage_status": stage_status,
+        "latest_ingest_run": latest_ingest_payload,
+        "raw_osm_counts_by_power": dict(sorted(raw_counts.items())),
+        "consumer_proxy_count": consumer_proxy_count,
+        "topology_metadata": topology["metadata"],
+        "quality": topology["quality"],
+        "solver_metadata": case["_metadata"],
+        "validation": {
+            "status": validation["status"],
+            "errors": validation["errors"],
+            "warnings": validation["warnings"],
+            "metrics": validation["metrics"],
+            "voltage_mismatches": validation["voltage_mismatches"],
+        },
+        "diagnostics": diagnostics,
+        "asset_reconciliation": {
+            "summary": reconciliation["summary"],
+            "top_generation_assets": reconciliation["generation_assets"][:10],
+            "top_linear_assets": reconciliation["linear_assets"][:10],
+            "top_dropped_or_aggregated_assets": reconciliation["dropped_or_aggregated_assets"][:10],
+        },
+        "handoff_artifacts": handoff_artifacts["paths"],
+        "handoff_artifact_exists": handoff_artifacts["exists"],
+    }
+
+
+def _build_dashboard_snapshot(params: DashboardSnapshotParams) -> dict[str, Any]:
+    with get_db() as conn:
+        latest_ingest = latest_ingest_run(conn, params.region_key)
+        proxy_status = consumer_proxy_signature(conn, params.region_key)
+        cache_key = _dashboard_cache_key(params, latest_ingest, proxy_status)
+        with _DASHBOARD_CACHE_LOCK:
+            cached = _DASHBOARD_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
+        rows = list_elements(
+            conn,
+            region_key=params.region_key,
+            limit=100000,
+        )
+        proxy_rows = list_consumer_proxy_allocation_rows(conn, region_key=params.region_key, limit=100000)
+
+    consumer_proxies_payload = [dict(row) for row in proxy_rows]
+    topology = build_topology_preview(
+        rows,
+        snap_tolerance_km=params.snap_tolerance_km,
+        demand_snapshot=params.demand_snapshot,
+        include_hk_interties=params.include_hk_interties,
+        hk_intertie_derate=params.hk_intertie_derate,
+        min_voltage_kv=params.min_voltage_kv,
+        consumer_proxies=consumer_proxies_payload,
+    )
+    case = topology_preview_to_powermodels(topology)
+    validation = validate_powermodels_case(case)
+    diagnostics = build_topology_diagnostics(case)
+    reconciliation = build_asset_reconciliation(rows, topology, case)
+    handoff_artifacts = _handoff_artifact_summary()
+    latest_ingest_payload = _latest_ingest_payload(latest_ingest)
+    summary = _pipeline_summary_payload(
+        params=params,
+        rows=rows,
+        topology=topology,
+        case=case,
+        validation=validation,
+        diagnostics=diagnostics,
+        reconciliation=reconciliation,
+        latest_ingest_payload=latest_ingest_payload,
+        consumer_proxy_count=proxy_status["count"],
+        handoff_artifacts=handoff_artifacts,
+    )
+    snapshot = {
+        "region_key": params.region_key,
+        "assets": [_asset_row(row) for row in rows[: params.asset_limit]],
+        "topology": topology,
+        "powermodels_case": case,
+        "validation": validation,
+        "diagnostics": diagnostics,
+        "asset_reconciliation": reconciliation,
+        "summary": summary,
+    }
+    with _DASHBOARD_CACHE_LOCK:
+        _DASHBOARD_CACHE[cache_key] = snapshot
+        if len(_DASHBOARD_CACHE) > 16:
+            oldest_key = next(iter(_DASHBOARD_CACHE))
+            _DASHBOARD_CACHE.pop(oldest_key, None)
+    return snapshot
+
+
+def _important_proxy_reason(proxy: dict[str, Any]) -> str | None:
+    proxy_type = str(proxy.get("proxy_type") or "").lower()
+    sector = str(proxy.get("sector") or "").lower()
+    name = str(proxy.get("name") or "").lower()
+    tags = proxy.get("tags") if isinstance(proxy.get("tags"), dict) else {}
+    tag_values = " ".join(str(value).lower() for value in tags.values())
+    if proxy_type in {"hospital", "charging_station", "station", "ferry_terminal", "aerodrome", "terminal"}:
+        return proxy_type
+    if proxy_type in {"works", "water_works", "wastewater_plant"}:
+        return "industrial_infrastructure"
+    if "data_center" in tag_values or "data centre" in tag_values or "data_centre" in tag_values or "data center" in name or "data centre" in name:
+        return "data_center"
+    if str(tags.get("telecom") or "").lower() == "data_center":
+        return "data_center"
+    if sector in {"industrial", "commercial"} and proxy_type in {"building", "landuse", "office", "mall"}:
+        return f"large_{sector}_proxy"
+    return None
 
 
 @app.get("/health")
@@ -287,6 +495,52 @@ def consumer_proxies(
         return rows_to_consumer_proxies(list_consumer_proxy_elements(conn, region_key=region_key, sector=sector, limit=limit, offset=offset))
 
 
+@app.get("/grid/consumer-proxies/important")
+def important_consumer_proxies(
+    region_key: str = "hong-kong",
+    limit: int = Query(default=500, ge=1, le=2000),
+) -> list[dict[str, Any]]:
+    try:
+        get_region(region_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    with get_db() as conn:
+        rows = list_consumer_proxy_marker_rows(conn, region_key=region_key, limit=max(limit * 20, 1000))
+
+    markers = []
+    category_counts: dict[str, int] = {}
+    category_caps = {
+        "large_industrial_proxy": max(limit // 5, 20),
+        "large_commercial_proxy": max(limit // 5, 20),
+    }
+    for row in rows:
+        proxy = dict(row)
+        tags_json = proxy.pop("tags_json", None)
+        proxy["tags"] = json.loads(tags_json) if tags_json else {}
+        reason = _important_proxy_reason(proxy)
+        if reason is None:
+            continue
+        if category_counts.get(reason, 0) >= category_caps.get(reason, limit):
+            continue
+        category_counts[reason] = category_counts.get(reason, 0) + 1
+        markers.append(
+            {
+                "id": f"{proxy['osm_type']}:{proxy['osm_id']}:{proxy['proxy_type']}",
+                "name": proxy["name"],
+                "proxy_type": proxy["proxy_type"],
+                "sector": proxy["sector"],
+                "weight": proxy["weight"],
+                "confidence": proxy["confidence"],
+                "lat": proxy["lat"],
+                "lon": proxy["lon"],
+                "reason": reason,
+            }
+        )
+        if len(markers) >= limit:
+            break
+    return markers
+
+
 @app.get("/grid/topology/preview")
 def topology_preview(
     region_key: str = "hong-kong",
@@ -301,22 +555,16 @@ def topology_preview(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    with get_db() as conn:
-        rows = list_elements(
-            conn,
+    return _build_dashboard_snapshot(
+        DashboardSnapshotParams(
             region_key=region_key,
-            limit=100000,
+            snap_tolerance_km=snap_tolerance_km,
+            demand_snapshot=demand_snapshot,
+            include_hk_interties=include_hk_interties,
+            hk_intertie_derate=hk_intertie_derate,
+            min_voltage_kv=min_voltage_kv,
         )
-        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
-    return build_topology_preview(
-        rows,
-        snap_tolerance_km=snap_tolerance_km,
-        demand_snapshot=demand_snapshot,
-        include_hk_interties=include_hk_interties,
-        hk_intertie_derate=hk_intertie_derate,
-        min_voltage_kv=min_voltage_kv,
-        consumer_proxies=rows_to_consumer_proxies(proxy_rows),
-    )
+    )["topology"]
 
 
 @app.get("/grid/topology/powermodels-preview")
@@ -333,22 +581,16 @@ def powermodels_preview(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    with get_db() as conn:
-        rows = list_elements(
-            conn,
+    return _build_dashboard_snapshot(
+        DashboardSnapshotParams(
             region_key=region_key,
-            limit=100000,
+            snap_tolerance_km=snap_tolerance_km,
+            demand_snapshot=demand_snapshot,
+            include_hk_interties=include_hk_interties,
+            hk_intertie_derate=hk_intertie_derate,
+            min_voltage_kv=min_voltage_kv,
         )
-        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
-    return build_powermodels_preview(
-        rows,
-        snap_tolerance_km=snap_tolerance_km,
-        demand_snapshot=demand_snapshot,
-        include_hk_interties=include_hk_interties,
-        hk_intertie_derate=hk_intertie_derate,
-        min_voltage_kv=min_voltage_kv,
-        consumer_proxies=rows_to_consumer_proxies(proxy_rows),
-    )
+    )["powermodels_case"]
 
 
 @app.get("/grid/topology/validation")
@@ -365,22 +607,16 @@ def topology_validation(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    with get_db() as conn:
-        rows = list_elements(
-            conn,
+    return _build_dashboard_snapshot(
+        DashboardSnapshotParams(
             region_key=region_key,
-            limit=100000,
+            snap_tolerance_km=snap_tolerance_km,
+            demand_snapshot=demand_snapshot,
+            include_hk_interties=include_hk_interties,
+            hk_intertie_derate=hk_intertie_derate,
+            min_voltage_kv=min_voltage_kv,
         )
-        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
-    return build_powermodels_validation(
-        rows,
-        snap_tolerance_km=snap_tolerance_km,
-        demand_snapshot=demand_snapshot,
-        include_hk_interties=include_hk_interties,
-        hk_intertie_derate=hk_intertie_derate,
-        min_voltage_kv=min_voltage_kv,
-        consumer_proxies=rows_to_consumer_proxies(proxy_rows),
-    )
+    )["summary"]["validation"]
 
 
 @app.get("/topology/diagnostics")
@@ -397,23 +633,16 @@ def topology_diagnostics(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    with get_db() as conn:
-        rows = list_elements(
-            conn,
+    return _build_dashboard_snapshot(
+        DashboardSnapshotParams(
             region_key=region_key,
-            limit=100000,
+            snap_tolerance_km=snap_tolerance_km,
+            demand_snapshot=demand_snapshot,
+            include_hk_interties=include_hk_interties,
+            hk_intertie_derate=hk_intertie_derate,
+            min_voltage_kv=min_voltage_kv,
         )
-        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
-    case = build_powermodels_preview(
-        rows,
-        snap_tolerance_km=snap_tolerance_km,
-        demand_snapshot=demand_snapshot,
-        include_hk_interties=include_hk_interties,
-        hk_intertie_derate=hk_intertie_derate,
-        min_voltage_kv=min_voltage_kv,
-        consumer_proxies=rows_to_consumer_proxies(proxy_rows),
-    )
-    return build_topology_diagnostics(case)
+    )["summary"]["diagnostics"]
 
 
 @app.get("/topology/asset-reconciliation")
@@ -430,24 +659,44 @@ def topology_asset_reconciliation(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    with get_db() as conn:
-        rows = list_elements(
-            conn,
+    return _build_dashboard_snapshot(
+        DashboardSnapshotParams(
             region_key=region_key,
-            limit=100000,
+            snap_tolerance_km=snap_tolerance_km,
+            demand_snapshot=demand_snapshot,
+            include_hk_interties=include_hk_interties,
+            hk_intertie_derate=hk_intertie_derate,
+            min_voltage_kv=min_voltage_kv,
         )
-        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
-    topology = build_topology_preview(
-        rows,
-        snap_tolerance_km=snap_tolerance_km,
-        demand_snapshot=demand_snapshot,
-        include_hk_interties=include_hk_interties,
-        hk_intertie_derate=hk_intertie_derate,
-        min_voltage_kv=min_voltage_kv,
-        consumer_proxies=rows_to_consumer_proxies(proxy_rows),
+    )["asset_reconciliation"]
+
+
+@app.get("/grid/dashboard-snapshot")
+def dashboard_snapshot(
+    region_key: str = "hong-kong",
+    snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
+    demand_snapshot: str = Query(default="peak_16h", pattern=DEMAND_SNAPSHOT_PATTERN),
+    include_hk_interties: bool = False,
+    hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
+    min_voltage_kv: float | None = Query(default=100.0, gt=0.0),
+    asset_limit: int = Query(default=5000, ge=1, le=5000),
+) -> dict[str, Any]:
+    try:
+        get_region(region_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return _build_dashboard_snapshot(
+        DashboardSnapshotParams(
+            region_key=region_key,
+            snap_tolerance_km=snap_tolerance_km,
+            demand_snapshot=demand_snapshot,
+            include_hk_interties=include_hk_interties,
+            hk_intertie_derate=hk_intertie_derate,
+            min_voltage_kv=min_voltage_kv,
+            asset_limit=asset_limit,
+        )
     )
-    case = topology_preview_to_powermodels(topology)
-    return build_asset_reconciliation(rows, topology, case)
 
 
 @app.get("/grid/topology/pipeline-summary")
@@ -464,100 +713,13 @@ def topology_pipeline_summary(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    with get_db() as conn:
-        rows = list_elements(
-            conn,
+    return _build_dashboard_snapshot(
+        DashboardSnapshotParams(
             region_key=region_key,
-            limit=100000,
+            snap_tolerance_km=snap_tolerance_km,
+            demand_snapshot=demand_snapshot,
+            include_hk_interties=include_hk_interties,
+            hk_intertie_derate=hk_intertie_derate,
+            min_voltage_kv=min_voltage_kv,
         )
-        latest_ingest = latest_ingest_run(conn, region_key)
-        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
-    consumer_proxies_payload = rows_to_consumer_proxies(proxy_rows)
-
-    topology = build_topology_preview(
-        rows,
-        snap_tolerance_km=snap_tolerance_km,
-        demand_snapshot=demand_snapshot,
-        include_hk_interties=include_hk_interties,
-        hk_intertie_derate=hk_intertie_derate,
-        min_voltage_kv=min_voltage_kv,
-        consumer_proxies=consumer_proxies_payload,
-    )
-    case = build_powermodels_preview(
-        rows,
-        snap_tolerance_km=snap_tolerance_km,
-        demand_snapshot=demand_snapshot,
-        include_hk_interties=include_hk_interties,
-        hk_intertie_derate=hk_intertie_derate,
-        min_voltage_kv=min_voltage_kv,
-        consumer_proxies=consumer_proxies_payload,
-    )
-    validation = validate_powermodels_case(case)
-    diagnostics = build_topology_diagnostics(case)
-    reconciliation = build_asset_reconciliation(rows, topology, case)
-
-    raw_counts = {}
-    for row in rows:
-        power = row["power"]
-        raw_counts[power] = raw_counts.get(power, 0) + 1
-
-    handoff_artifacts = _handoff_artifact_summary()
-    stage_status = {
-        "raw_osm": "complete" if rows else "not_run",
-        "reconstructed_circuits": "complete" if topology["metadata"]["branch_count"] else "warning",
-        "solver_topology": "complete" if case["_metadata"]["bus_count"] else "not_run",
-        "validation": validation["status"],
-        "handoff_artifacts": handoff_artifacts["status"],
-    }
-    latest_ingest_payload = dict(latest_ingest) if latest_ingest is not None else None
-    if latest_ingest_payload and latest_ingest_payload["status"] == "running":
-        stage_status.update(
-            {
-                "raw_osm": "running",
-                "reconstructed_circuits": "running",
-                "solver_topology": "running",
-                "validation": "running",
-            }
-        )
-    elif latest_ingest_payload and latest_ingest_payload["status"] == "failed" and not rows:
-        stage_status["raw_osm"] = "error"
-    if not rows:
-        stage_status["reconstructed_circuits"] = "not_run"
-        stage_status["validation"] = "not_run"
-        if latest_ingest_payload and latest_ingest_payload["status"] == "running":
-            stage_status["reconstructed_circuits"] = "running"
-            stage_status["validation"] = "running"
-
-    return {
-        "region_key": region_key,
-        "parameters": {
-            "snap_tolerance_km": snap_tolerance_km,
-            "demand_snapshot": demand_snapshot,
-            "include_hk_interties": include_hk_interties,
-            "hk_intertie_derate": hk_intertie_derate,
-            "min_voltage_kv": min_voltage_kv,
-        },
-        "stage_status": stage_status,
-        "latest_ingest_run": latest_ingest_payload,
-        "raw_osm_counts_by_power": dict(sorted(raw_counts.items())),
-        "consumer_proxy_count": len(consumer_proxies_payload),
-        "topology_metadata": topology["metadata"],
-        "quality": topology["quality"],
-        "solver_metadata": case["_metadata"],
-        "validation": {
-            "status": validation["status"],
-            "errors": validation["errors"],
-            "warnings": validation["warnings"],
-            "metrics": validation["metrics"],
-            "voltage_mismatches": validation["voltage_mismatches"],
-        },
-        "diagnostics": diagnostics,
-        "asset_reconciliation": {
-            "summary": reconciliation["summary"],
-            "top_generation_assets": reconciliation["generation_assets"][:10],
-            "top_linear_assets": reconciliation["linear_assets"][:10],
-            "top_dropped_or_aggregated_assets": reconciliation["dropped_or_aggregated_assets"][:10],
-        },
-        "handoff_artifacts": handoff_artifacts["paths"],
-        "handoff_artifact_exists": handoff_artifacts["exists"],
-    }
+    )["summary"]
