@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from app import main
 from app.assumptions.lines import branch_parameter_defaults
 from app.assumptions.provenance import ASSUMPTION_TABLES, REQUIRED_PROVENANCE_COLUMNS, read_table_rows
+from app.assumptions.transformers import transformer_parameter_defaults
 from app.assumptions.validation import build_assumption_validation_summary
 
 
@@ -20,6 +21,8 @@ def test_assumption_csvs_have_required_provenance_columns() -> None:
     assert row_counts["line_thermal_rating_defaults"] > 0
     assert row_counts["cable_impedance_defaults"] > 0
     assert row_counts["overhead_line_impedance_defaults"] > 0
+    assert row_counts["transformer_capacity_defaults"] > 0
+    assert row_counts["transformer_tap_defaults"] > 0
 
 
 def test_assumption_validation_summary_reports_line_enrichment_and_remaining_empty_tables() -> None:
@@ -28,7 +31,7 @@ def test_assumption_validation_summary_reports_line_enrichment_and_remaining_emp
     assert payload["schema"] == "tiangou.assumptions.validation_summary.v1"
     assert payload["status"] == "warning"
     assert payload["table_count"] == 12
-    assert payload["row_count"] == 26
+    assert payload["row_count"] == 46
     assert payload["errors"] == []
     assert {warning["code"] for warning in payload["warnings"]} == {"empty_table"}
     assert set(payload["provenance_classes"]) == {
@@ -37,7 +40,7 @@ def test_assumption_validation_summary_reports_line_enrichment_and_remaining_emp
         "synthetic_engineering_default",
     }
     assert all(table["status"] == "ok" for table in payload["tables"])
-    assert payload["provenance_counts"] == {"synthetic_engineering_default": 26}
+    assert payload["provenance_counts"] == {"synthetic_engineering_default": 46}
 
 
 def test_line_assumption_lookup_scales_rating_and_exposes_provenance() -> None:
@@ -51,6 +54,23 @@ def test_line_assumption_lookup_scales_rating_and_exposes_provenance() -> None:
     assert defaults["parameter_table_keys"] == [
         "overhead_line_impedance_defaults",
         "line_thermal_rating_defaults",
+    ]
+
+
+def test_transformer_assumption_lookup_exposes_capacity_tap_and_provenance() -> None:
+    defaults = transformer_parameter_defaults(400.0, 132.0)
+
+    assert defaults["rate_mva"] == 750.0
+    assert defaults["sn_mva_default"] == 750.0
+    assert defaults["br_x"] == 0.10
+    assert defaults["tap"] == 1.0
+    assert defaults["tap_min"] == 0.90
+    assert defaults["tap_max"] == 1.10
+    assert defaults["parameter_source"] == "transformer_assumption_table_lookup"
+    assert defaults["parameter_provenance"] == "synthetic_engineering_default"
+    assert defaults["parameter_table_keys"] == [
+        "transformer_capacity_defaults",
+        "transformer_tap_defaults",
     ]
 
 
@@ -75,7 +95,7 @@ def test_assumption_api_summary_and_drilldowns() -> None:
     summary_payload = summary_response.json()
     assert summary_payload["table_count"] == 12
     assert summary_payload["status"] == "warning"
-    assert summary_payload["row_count"] == 26
+    assert summary_payload["row_count"] == 46
     assert {table["key"] for table in lines_response.json()} == {
         "line_thermal_rating_defaults",
         "cable_impedance_defaults",

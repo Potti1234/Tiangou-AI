@@ -483,8 +483,13 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert all(branch["b_us_per_km"] > 0 for branch in case["branch"].values())
     inferred_transformer = next(branch for branch in case["branch"].values() if branch["source_id"] == "osm:way:10")
     assert inferred_transformer["transformer"] is True
-    assert inferred_transformer["parameter_source"] == "inferred_transformer_voltage_pair_default"
+    assert inferred_transformer["parameter_source"] == "transformer_assumption_table_lookup"
     assert inferred_transformer["parameter_table"] == "transformer_two_winding_defaults"
+    assert inferred_transformer["rate_a"] == 750.0
+    assert inferred_transformer["sn_mva_default"] == 750.0
+    assert inferred_transformer["tap_min"] == 0.9
+    assert inferred_transformer["tap_max"] == 1.1
+    assert inferred_transformer["parameter_provenance"] == "synthetic_engineering_default"
     assert inferred_transformer["transformer_inference"]["method"] == "clear_voltage_mismatch_branch_conversion"
     assert case["_metadata"]["inferred_transformer_branch_count"] == 1
     assert case["_metadata"]["synthetic_branch_count"] == 0
@@ -507,7 +512,7 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert {
         branch["parameter_source"]
         for branch in case["branch"].values()
-    } == {"inferred_transformer_voltage_pair_default"}
+    } == {"transformer_assumption_table_lookup"}
     assert {
         branch["parameter_table"]
         for branch in case["branch"].values()

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.assumptions.lines import branch_parameter_defaults, line_lookup_voltage_metadata
+from app.assumptions.transformers import transformer_lookup_metadata, transformer_parameter_defaults
 from app.data_sources import CalibrationBundle, load_calibration_bundle
 
 
@@ -68,10 +69,6 @@ HK_ELECTRIC_DISTRICT_CENTROIDS = {
     "lamma": (22.206, 114.126),
 }
 
-TRANSFORMER_DEFAULTS = {
-    "autotransformer": {"br_r": 0.005, "br_x": 0.08},
-    "two_winding": {"br_r": 0.005, "br_x": 0.1},
-}
 GENERATOR_FUEL_DEFAULTS = {
     "coal": {"cost": [0.012, 26.0, 0.0], "cost_class": "thermal_coal", "pmin_fraction": 0.0, "power_factor": 0.86},
     "gas": {"cost": [0.01, 22.0, 0.0], "cost_class": "thermal_gas", "pmin_fraction": 0.0, "power_factor": 0.86},
@@ -2579,13 +2576,14 @@ def _powermodels_branch(
         tap = 1.0
     else:
         transformer_defaults = _transformer_defaults(transformer_info["high_kv"], transformer_info["low_kv"])
+        defaults.update(transformer_defaults)
         br_r = transformer_defaults["br_r"]
         br_x = transformer_defaults["br_x"]
         charging_pu = 0.0
         transformer = True
         parameter_source = transformer_defaults["parameter_source"]
         transformer_parameter_table = transformer_defaults["parameter_table"]
-        tap = 1.0
+        tap = transformer_defaults["tap"]
 
     return {
         "index": index,
@@ -2624,6 +2622,14 @@ def _powermodels_branch(
         "b_us_per_km": defaults.get("b_us_per_km"),
         "rate_mva_per_circuit": defaults.get("rate_mva_per_circuit"),
         "emergency_factor": defaults.get("emergency_factor"),
+        "sn_mva_default": defaults.get("sn_mva_default"),
+        "tap_side": defaults.get("tap_side"),
+        "tap_min": defaults.get("tap_min"),
+        "tap_max": defaults.get("tap_max"),
+        "tap_step_percent": defaults.get("tap_step_percent"),
+        "matched_primary_kv": defaults.get("matched_primary_kv"),
+        "matched_secondary_kv": defaults.get("matched_secondary_kv"),
+        "facility_class": defaults.get("facility_class"),
         "parameter_method": defaults.get("parameter_method"),
         "parameter_provenance": defaults.get("parameter_provenance"),
         "parameter_confidence": defaults.get("parameter_confidence"),
@@ -2704,15 +2710,7 @@ def _inferred_transformer_info(
 
 
 def _transformer_defaults(high_kv: float, low_kv: float) -> dict[str, Any]:
-    ratio = high_kv / low_kv if low_kv else 1.0
-    table_name = "autotransformer" if ratio < 3.0 else "two_winding"
-    defaults = TRANSFORMER_DEFAULTS[table_name]
-    return {
-        "br_r": defaults["br_r"],
-        "br_x": defaults["br_x"],
-        "parameter_source": "inferred_transformer_voltage_pair_default",
-        "parameter_table": f"transformer_{table_name}_defaults",
-    }
+    return transformer_parameter_defaults(high_kv, low_kv)
 
 
 def _is_synthetic_branch(branch: Mapping[str, Any]) -> bool:
@@ -3839,7 +3837,7 @@ def _reactive_mvar(pd_mw: float, *, power_factor: float = LOAD_DEFAULTS["power_f
 def _parameter_lookup_metadata() -> dict[str, Any]:
     return {
         **line_lookup_voltage_metadata(),
-        "transformer_defaults": sorted(TRANSFORMER_DEFAULTS),
+        **transformer_lookup_metadata(),
         "generator_fuel_defaults": sorted(GENERATOR_FUEL_DEFAULTS),
         "equivalent_generator_defaults": sorted(EQUIVALENT_GENERATOR_DEFAULTS),
         "load_power_factor": LOAD_DEFAULTS["power_factor"],

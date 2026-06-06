@@ -78,7 +78,7 @@ Inspect the assumption-table provenance validation summary:
 Invoke-RestMethod http://127.0.0.1:8000/assumptions/summary
 ```
 
-The tables live under `data/assumptions/` and define auditable CSV inputs for line, transformer, demand-profile, data-center, generator, contingency, and import assumptions. Line/cable thermal ratings and impedance defaults are populated and exported into solver branches with `parameter_source`, `parameter_method`, `parameter_provenance`, `parameter_confidence`, source detail, and assumption text. Remaining future-slice tables are still surfaced as empty-table warnings until populated. Drilldown endpoints are available at `/assumptions/lines`, `/assumptions/transformers`, `/assumptions/data-centers`, `/assumptions/generators`, `/assumptions/contingencies`, and `/assumptions/imports`.
+The tables live under `data/assumptions/` and define auditable CSV inputs for line, transformer, demand-profile, data-center, generator, contingency, and import assumptions. Line/cable thermal ratings, line/cable impedances, transformer capacity defaults, and transformer tap defaults are populated and exported into solver branches with `parameter_source`, `parameter_method`, `parameter_provenance`, `parameter_confidence`, source detail, and assumption text. Remaining future-slice tables are still surfaced as empty-table warnings until populated. Drilldown endpoints are available at `/assumptions/lines`, `/assumptions/transformers`, `/assumptions/data-centers`, `/assumptions/generators`, `/assumptions/contingencies`, and `/assumptions/imports`.
 
 Write the preview to a file for the downstream Julia solver pipeline:
 
