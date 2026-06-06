@@ -121,4 +121,6 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert payload["_metadata"]["gen_count"] == 1
     assert overnight_response.json()["_metadata"]["total_pd_mw"] == 4034.8
     assert intertie_validation_response.json()["metrics"]["island_count"] == 1
-    assert validation_response.json()["status"] == "ok"
+    validation_payload = validation_response.json()
+    assert validation_payload["status"] == "ok"
+    assert validation_payload["metrics"]["low_confidence_counts"]["load"] == 2

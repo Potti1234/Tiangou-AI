@@ -627,6 +627,7 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
         )
 
     island_report = _case_island_report(buses, branches, loads, generators)
+    quality_metrics = _case_quality_metrics(buses, branches, loads, generators)
     for island in island_report["islands"]:
         if island["gen_count"] > 0 and island["reference_bus_count"] == 0:
             errors.append(
@@ -677,6 +678,8 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
             "total_pd_mw": round(total_pd * BASE_MVA, 3),
             "total_pmax_mw": round(total_pmax * BASE_MVA, 3),
             "island_count": island_report["island_count"],
+            "low_confidence_counts": quality_metrics["low_confidence_counts"],
+            "provenance_summary": quality_metrics["provenance_summary"],
         },
         "islands": island_report["islands"],
     }
@@ -735,6 +738,38 @@ def _case_island_report(
         )
 
     return {"island_count": len(islands), "islands": islands}
+
+
+def _case_quality_metrics(
+    buses: Mapping[str, Any],
+    branches: Mapping[str, Any],
+    loads: Mapping[str, Any],
+    generators: Mapping[str, Any],
+) -> dict[str, Any]:
+    collections = {
+        "bus": buses.values(),
+        "branch": branches.values(),
+        "load": loads.values(),
+        "gen": generators.values(),
+    }
+    return {
+        "low_confidence_counts": {
+            name: sum(1 for item in items if _confidence(item) < 0.5)
+            for name, items in collections.items()
+        },
+        "provenance_summary": {
+            name: _count_by(items, "provenance")
+            for name, items in collections.items()
+        },
+    }
+
+
+def _confidence(item: Mapping[str, Any]) -> float:
+    value = item.get("confidence")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _powermodels_bus_type(

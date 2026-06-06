@@ -70,6 +70,8 @@ Run structural validation before solver handoff:
 Invoke-RestMethod http://127.0.0.1:8000/grid/topology/validation
 ```
 
+Validation returns structural errors separately from research-model quality metrics such as `low_confidence_counts` and `provenance_summary`.
+
 Write the preview to a file for the downstream Julia solver pipeline:
 
 ```powershell

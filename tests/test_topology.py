@@ -199,6 +199,10 @@ def test_powermodels_validation_reports_islands_and_capacity() -> None:
     assert validation["status"] == "ok"
     assert validation["metrics"]["island_count"] == 2
     assert validation["metrics"]["total_pd_mw"] == 9591.0
+    assert validation["metrics"]["low_confidence_counts"] == {"branch": 0, "bus": 2, "gen": 2, "load": 4}
+    assert validation["metrics"]["provenance_summary"]["load"] == {
+        "public_peak_demand_scaled_equal_substation_split": 4
+    }
     assert validation["errors"] == []
     assert all(island["reference_bus_count"] == 1 for island in validation["islands"])
 
