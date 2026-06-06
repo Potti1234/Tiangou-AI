@@ -135,6 +135,7 @@ type ValidationPayload = {
   errors: Array<Record<string, unknown>>
   warnings: Array<Record<string, unknown>>
   metrics: Record<string, number | Record<string, number>>
+  voltage_mismatches: Array<{ source_id?: string | null }>
 }
 
 type PipelineSummary = {
@@ -624,25 +625,13 @@ function App() {
     return new Set(Object.values(caseData?.branch ?? {}).map((branch) => branch.source_id))
   }, [caseData])
 
-  const severeMismatchSourceIds = useMemo(() => {
+  const voltageMismatchSourceIds = useMemo(() => {
     const ids = new Set<string>()
-    const mismatches = summary?.validation.metrics.severe_branch_voltage_mismatch_count
-    if (typeof mismatches === "number" && mismatches > 0) {
-      for (const branch of Object.values(caseData?.branch ?? {})) {
-        const voltage = branch.matched_voltage_kv
-        const from = caseBusByNumber.get(branch.f_bus)
-        const to = caseBusByNumber.get(branch.t_bus)
-        if (!voltage || !from || !to) continue
-        if (
-          Math.abs(from.base_kv - voltage) / voltage >= 0.5 ||
-          Math.abs(to.base_kv - voltage) / voltage >= 0.5
-        ) {
-          ids.add(branch.source_id)
-        }
-      }
+    for (const mismatch of summary?.validation.voltage_mismatches ?? []) {
+      if (mismatch.source_id) ids.add(mismatch.source_id)
     }
     return ids
-  }, [caseData, caseBusByNumber, summary])
+  }, [summary])
 
   const coordinateForBus = (sourceId: string | undefined): [number, number] | null => {
     if (!sourceId) return null
@@ -698,7 +687,7 @@ function App() {
     return Object.entries(caseData?.branch ?? {}).flatMap(([id, branch]) => {
       const coordinates = solverBranchCoordinates(branch)
       if (coordinates.length < 2) return []
-      const mismatch = severeMismatchSourceIds.has(branch.source_id)
+      const mismatch = voltageMismatchSourceIds.has(branch.source_id)
       const synthetic = branch.provenance?.includes("public") || branch.source_id.startsWith("synthetic:")
       return [{
         id: `solver-${id}`,
@@ -710,7 +699,7 @@ function App() {
         dashArray: branch.transformer || synthetic ? [3, 2] as [number, number] : undefined,
       }]
     })
-  }, [assets, caseData, mode, severeMismatchSourceIds, solverBranchSourceIds, topology])
+  }, [assets, caseData, mode, solverBranchSourceIds, topology, voltageMismatchSourceIds])
 
   const pointLayers = useMemo<PointLayer[]>(() => {
     if (mode === "raw") return []
