@@ -23,6 +23,7 @@ def export_powermodels_case(
     demand_snapshot: str = "peak_16h",
     include_hk_interties: bool = False,
     hk_intertie_derate: float = 1.0,
+    min_voltage_kv: float | None = None,
     allow_validation_errors: bool = False,
 ) -> dict[str, Any]:
     with connect(database_path) as conn:
@@ -34,6 +35,7 @@ def export_powermodels_case(
         demand_snapshot=demand_snapshot,
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
+        min_voltage_kv=min_voltage_kv,
     )
     validation = validate_powermodels_case(case)
     if validation["status"] == "error" and not allow_validation_errors:
@@ -48,6 +50,7 @@ def export_powermodels_case(
         "demand_snapshot": demand_snapshot,
         "include_hk_interties": include_hk_interties,
         "hk_intertie_derate": hk_intertie_derate,
+        "min_voltage_kv": min_voltage_kv,
         "validation": validation,
         "metadata": case["_metadata"],
     }
@@ -61,6 +64,7 @@ def export_hong_kong_phase1_bundle(
     include_hk_interties: bool = False,
     hk_intertie_derate: float = 1.0,
     intertie_derate_scenarios: tuple[float, ...] | None = None,
+    min_voltage_kv: float | None = None,
     n_per_mode: int = 1,
     allow_validation_errors: bool = False,
 ) -> dict[str, Any]:
@@ -84,6 +88,7 @@ def export_hong_kong_phase1_bundle(
                     demand_snapshot=demand_snapshot,
                     include_hk_interties=include_hk_interties,
                     hk_intertie_derate=derate,
+                    min_voltage_kv=min_voltage_kv,
                     allow_validation_errors=allow_validation_errors,
                 )
             )
@@ -93,6 +98,7 @@ def export_hong_kong_phase1_bundle(
         "include_hk_interties": include_hk_interties,
         "hk_intertie_derate": hk_intertie_derate,
         "intertie_derate_scenarios": list(derate_scenarios),
+        "min_voltage_kv": min_voltage_kv,
         "n_per_mode": n_per_mode,
         "exports": exports,
     }
@@ -207,6 +213,12 @@ def main() -> None:
     parser.add_argument("--demand-snapshot", choices=sorted(DEMAND_SNAPSHOTS), default="peak_16h")
     parser.add_argument("--hk-intertie-derate", type=float, default=1.0)
     parser.add_argument(
+        "--min-voltage-kv",
+        type=float,
+        default=None,
+        help="Drop known bus/branch assets below this voltage before topology export, e.g. 100 for transmission-level handoff.",
+    )
+    parser.add_argument(
         "--intertie-derate-scenarios",
         type=_parse_derate_scenarios,
         help="Comma-separated intertie derates for --hong-kong-phase1-bundle, for example 1.0,0.75,0.5.",
@@ -237,6 +249,7 @@ def main() -> None:
             include_hk_interties=args.include_hk_interties,
             hk_intertie_derate=args.hk_intertie_derate,
             intertie_derate_scenarios=args.intertie_derate_scenarios,
+            min_voltage_kv=args.min_voltage_kv,
             n_per_mode=args.n_per_mode,
             allow_validation_errors=args.allow_validation_errors,
         )
@@ -249,6 +262,7 @@ def main() -> None:
             demand_snapshot=args.demand_snapshot,
             include_hk_interties=args.include_hk_interties,
             hk_intertie_derate=args.hk_intertie_derate,
+            min_voltage_kv=args.min_voltage_kv,
             allow_validation_errors=args.allow_validation_errors,
         )
     print(json.dumps(result, indent=2, sort_keys=True))

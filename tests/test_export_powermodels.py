@@ -45,6 +45,25 @@ def test_export_powermodels_case_writes_overnight_snapshot(tmp_path) -> None:
     assert payload["_metadata"]["total_equivalent_pmax_mw"] == 9170.0
 
 
+def test_export_powermodels_case_applies_min_voltage_filter(tmp_path) -> None:
+    db_path = tmp_path / "grid.sqlite3"
+    output_path = tmp_path / "filtered.json"
+    _seed_grid(db_path)
+    _seed_low_voltage_asset(db_path)
+
+    result = export_powermodels_case(
+        database_path=db_path,
+        output_path=output_path,
+        snap_tolerance_km=0.2,
+        min_voltage_kv=100.0,
+    )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result["min_voltage_kv"] == 100.0
+    assert payload["_metadata"]["min_voltage_kv"] == 100.0
+    assert payload["_metadata"]["branch_count"] == 1
+
+
 def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_path) -> None:
     db_path = tmp_path / "grid.sqlite3"
     output_dir = tmp_path / "processed"
@@ -268,6 +287,44 @@ def _seed_hk_electric_bus(db_path) -> None:
                         "operator": "HK Electric",
                         "voltage": "275000",
                     },
+                },
+            ],
+        )
+
+
+def _seed_low_voltage_asset(db_path) -> None:
+    with connect(db_path) as conn:
+        run_id = create_ingest_run(conn, "hong-kong", "query")
+        upsert_elements(
+            conn,
+            region_key="hong-kong",
+            ingest_run_id=run_id,
+            elements=[
+                {
+                    "type": "node",
+                    "id": 4,
+                    "lat": 22.35,
+                    "lon": 114.16,
+                    "tags": {
+                        "power": "substation",
+                        "name": "CLP 11kV",
+                        "operator": "CLP Power",
+                        "voltage": "11000",
+                    },
+                },
+                {
+                    "type": "way",
+                    "id": 11,
+                    "tags": {
+                        "power": "minor_line",
+                        "name": "CLP 11kV Spur",
+                        "operator": "CLP Power",
+                        "voltage": "11000",
+                    },
+                    "geometry": [
+                        {"lat": 22.35, "lon": 114.16},
+                        {"lat": 22.36, "lon": 114.17},
+                    ],
                 },
             ],
         )

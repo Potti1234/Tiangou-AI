@@ -178,6 +178,7 @@ def topology_preview(
     demand_snapshot: str = Query(default="peak_16h", pattern="^(peak_16h|overnight_04h)$"),
     include_hk_interties: bool = False,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
+    min_voltage_kv: float | None = Query(default=None, gt=0.0),
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -196,6 +197,7 @@ def topology_preview(
         demand_snapshot=demand_snapshot,
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
+        min_voltage_kv=min_voltage_kv,
     )
 
 
@@ -206,6 +208,7 @@ def powermodels_preview(
     demand_snapshot: str = Query(default="peak_16h", pattern="^(peak_16h|overnight_04h)$"),
     include_hk_interties: bool = False,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
+    min_voltage_kv: float | None = Query(default=None, gt=0.0),
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -224,6 +227,7 @@ def powermodels_preview(
         demand_snapshot=demand_snapshot,
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
+        min_voltage_kv=min_voltage_kv,
     )
 
 
@@ -234,6 +238,7 @@ def topology_validation(
     demand_snapshot: str = Query(default="peak_16h", pattern="^(peak_16h|overnight_04h)$"),
     include_hk_interties: bool = False,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
+    min_voltage_kv: float | None = Query(default=None, gt=0.0),
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -252,4 +257,5 @@ def topology_validation(
         demand_snapshot=demand_snapshot,
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
+        min_voltage_kv=min_voltage_kv,
     )

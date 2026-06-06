@@ -87,6 +87,59 @@ def test_powermodels_preview_exports_overnight_snapshot() -> None:
     )
 
 
+def test_topology_preview_can_filter_known_low_voltage_assets() -> None:
+    rows = [
+        *_sample_rows(),
+        {
+            "osm_type": "node",
+            "osm_id": 60,
+            "power": "substation",
+            "name": "CLP Low Voltage",
+            "voltage": "11000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.35,
+            "lon": 114.15,
+            "tags_json": '{"operator": "CLP Power", "voltage": "11000"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "way",
+            "osm_id": 61,
+            "power": "minor_line",
+            "name": "CLP Low Voltage Spur",
+            "voltage": "11000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.355,
+            "lon": 114.155,
+            "tags_json": '{"operator": "CLP Power", "voltage": "11000"}',
+            "geometry_json": '[{"lat": 22.35, "lon": 114.15}, {"lat": 22.36, "lon": 114.16}]',
+            "updated_at": "2026-01-01 00:00:00",
+        },
+    ]
+
+    unfiltered = build_topology_preview(rows, snap_tolerance_km=0.2)
+    filtered = build_topology_preview(rows, snap_tolerance_km=0.2, min_voltage_kv=100.0)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2, min_voltage_kv=100.0)
+
+    assert unfiltered["metadata"]["bus_count"] == 6
+    assert unfiltered["metadata"]["branch_count"] == 3
+    assert filtered["metadata"]["bus_count"] == 4
+    assert filtered["metadata"]["branch_count"] == 2
+    assert filtered["metadata"]["min_voltage_kv"] == 100.0
+    assert filtered["quality"]["filtered_low_voltage_count"] == 2
+    assert case["_metadata"]["min_voltage_kv"] == 100.0
+    assert all(bus["base_kv"] >= 100.0 for bus in case["bus"].values())
+
+
 def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
     rows = [
         *_sample_rows(),

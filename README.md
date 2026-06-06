@@ -78,6 +78,12 @@ Write the preview to a file for the downstream Julia solver pipeline:
 python -m app.export_powermodels data/processed/hong_kong_16h_model.json
 ```
 
+For a transmission-level handoff, drop known lower-voltage distribution assets before export:
+
+```powershell
+python -m app.export_powermodels data/processed/hong_kong_16h_model.json --min-voltage-kv 100
+```
+
 Add the public 720 MVA CLP-HK Electric interconnection when building an optimization case:
 
 ```powershell

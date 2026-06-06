@@ -103,6 +103,10 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
             "/grid/topology/powermodels-preview",
             params={"demand_snapshot": "overnight_04h"},
         )
+        filtered_response = client.get(
+            "/grid/topology/powermodels-preview",
+            params={"min_voltage_kv": 100.0},
+        )
         intertie_validation_response = client.get(
             "/grid/topology/validation",
             params={"include_hk_interties": True, "hk_intertie_derate": 0.5},
@@ -112,6 +116,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert ingest_response.status_code == 200
     assert preview_response.status_code == 200
     assert overnight_response.status_code == 200
+    assert filtered_response.status_code == 200
     assert intertie_validation_response.status_code == 200
     assert validation_response.status_code == 200
     payload = preview_response.json()
@@ -120,6 +125,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert payload["_metadata"]["load_count"] == 2
     assert payload["_metadata"]["gen_count"] == 1
     assert overnight_response.json()["_metadata"]["total_pd_mw"] == 4034.8
+    assert filtered_response.json()["_metadata"]["min_voltage_kv"] == 100.0
     assert intertie_validation_response.json()["metrics"]["island_count"] == 1
     validation_payload = validation_response.json()
     assert validation_payload["status"] == "ok"

@@ -241,8 +241,10 @@ def build_topology_preview(
     demand_snapshot: str = "peak_16h",
     include_hk_interties: bool = False,
     hk_intertie_derate: float = 1.0,
+    min_voltage_kv: float | None = None,
 ) -> dict[str, Any]:
     _validate_derate(hk_intertie_derate)
+    _validate_min_voltage(min_voltage_kv)
     snapshot = _demand_snapshot(demand_snapshot)
     records = [_row_to_record(row) for row in rows]
     buses: list[dict[str, Any]] = []
@@ -254,6 +256,8 @@ def build_topology_preview(
             continue
         bus_id = f"osm:{record['osm_type']}:{record['osm_id']}"
         base_kv = max(record["voltage_kv"]) if record["voltage_kv"] else None
+        if _below_min_voltage(base_kv, min_voltage_kv):
+            continue
         buses.append(
             {
                 "id": bus_id,
@@ -288,6 +292,9 @@ def build_topology_preview(
     synthetic_buses: dict[str, dict[str, Any]] = {}
     for record in records:
         if record["asset_kind"] != "branch":
+            continue
+        voltage_kv = max(record["voltage_kv"]) if record["voltage_kv"] else None
+        if _below_min_voltage(voltage_kv, min_voltage_kv):
             continue
         geometry = record.get("geometry") or []
         if len(geometry) < 2:
@@ -329,7 +336,6 @@ def build_topology_preview(
                 endpoint_bus_ids.append(bus_id)
                 endpoint_quality.append({"snap": "matched", "distance_km": distance})
 
-        voltage_kv = max(record["voltage_kv"]) if record["voltage_kv"] else None
         defaults = _branch_defaults(record["power"], voltage_kv)
         length_km = _geometry_length_km(geometry)
         branches.append(
@@ -366,6 +372,7 @@ def build_topology_preview(
             "load_factor": snapshot["load_factor"],
             "include_hk_interties": include_hk_interties,
             "hk_intertie_derate": hk_intertie_derate,
+            "min_voltage_kv": min_voltage_kv,
             "bus_count": len(buses),
             "branch_count": len(branches),
             "generator_count": len(generators),
@@ -375,7 +382,7 @@ def build_topology_preview(
         "branches": branches,
         "generators": generators,
         "loads": load_allocations,
-        "quality": _quality_summary(records, buses, branches),
+        "quality": _quality_summary(records, buses, branches, min_voltage_kv=min_voltage_kv),
     }
 
 
@@ -386,6 +393,7 @@ def build_powermodels_preview(
     demand_snapshot: str = "peak_16h",
     include_hk_interties: bool = False,
     hk_intertie_derate: float = 1.0,
+    min_voltage_kv: float | None = None,
 ) -> dict[str, Any]:
     topology = build_topology_preview(
         rows,
@@ -393,6 +401,7 @@ def build_powermodels_preview(
         demand_snapshot=demand_snapshot,
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
+        min_voltage_kv=min_voltage_kv,
     )
     return topology_preview_to_powermodels(topology)
 
@@ -404,6 +413,7 @@ def build_powermodels_validation(
     demand_snapshot: str = "peak_16h",
     include_hk_interties: bool = False,
     hk_intertie_derate: float = 1.0,
+    min_voltage_kv: float | None = None,
 ) -> dict[str, Any]:
     case = build_powermodels_preview(
         rows,
@@ -411,6 +421,7 @@ def build_powermodels_validation(
         demand_snapshot=demand_snapshot,
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
+        min_voltage_kv=min_voltage_kv,
     )
     return validate_powermodels_case(case)
 
@@ -502,6 +513,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
         "demand_snapshot": topology["metadata"]["demand_snapshot"],
         "include_hk_interties": topology["metadata"]["include_hk_interties"],
         "hk_intertie_derate": topology["metadata"]["hk_intertie_derate"],
+        "min_voltage_kv": topology["metadata"]["min_voltage_kv"],
         "baseMVA": BASE_MVA,
         "per_unit": True,
         "bus": bus_dict,
@@ -519,6 +531,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "load_factor": topology["metadata"]["load_factor"],
             "include_hk_interties": topology["metadata"]["include_hk_interties"],
             "hk_intertie_derate": topology["metadata"]["hk_intertie_derate"],
+            "min_voltage_kv": topology["metadata"]["min_voltage_kv"],
             "bus_count": len(bus_dict),
             "branch_count": len(branch_dict),
             "load_count": len(load_dict),
@@ -867,6 +880,15 @@ def _validate_derate(derate: float) -> None:
         raise ValueError("Derate factor must be greater than 0 and less than or equal to 1.")
 
 
+def _validate_min_voltage(min_voltage_kv: float | None) -> None:
+    if min_voltage_kv is not None and min_voltage_kv <= 0:
+        raise ValueError("Minimum voltage must be greater than 0 kV.")
+
+
+def _below_min_voltage(voltage_kv: float | None, min_voltage_kv: float | None) -> bool:
+    return voltage_kv is not None and min_voltage_kv is not None and voltage_kv < min_voltage_kv
+
+
 def _hk_intertie_branches(
     buses: list[dict[str, Any]],
     *,
@@ -1100,15 +1122,25 @@ def _quality_summary(
     records: list[dict[str, Any]],
     buses: list[dict[str, Any]],
     branches: list[dict[str, Any]],
+    *,
+    min_voltage_kv: float | None,
 ) -> dict[str, Any]:
     branches_without_voltage = sum(1 for branch in branches if branch["voltage_kv"] is None)
     synthetic_bus_count = sum(1 for bus in buses if bus["id"].startswith("synthetic:"))
     support_count = sum(1 for record in records if record["asset_kind"] == "support")
+    filtered_low_voltage_count = sum(
+        1
+        for record in records
+        if record["asset_kind"] in {"bus_candidate", "branch"}
+        and record["voltage_kv"]
+        and _below_min_voltage(max(record["voltage_kv"]), min_voltage_kv)
+    )
     return {
         "osm_record_count": len(records),
         "support_record_count": support_count,
         "branches_without_voltage": branches_without_voltage,
         "synthetic_bus_count": synthetic_bus_count,
+        "filtered_low_voltage_count": filtered_low_voltage_count,
         "notes": [
             "Synthetic buses indicate line or cable endpoints that did not snap to a known substation or terminal.",
             "Loads are only allocated when service territory can be inferred from OSM operator/name tags.",
