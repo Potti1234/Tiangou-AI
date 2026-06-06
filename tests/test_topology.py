@@ -70,9 +70,21 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert all(branch["br_x"] > 0 for branch in case["branch"].values())
     assert all(branch["g_fr"] == 0.0 for branch in case["branch"].values())
     assert all(branch["g_to"] == 0.0 for branch in case["branch"].values())
-    assert all(branch["b_fr"] > 0 for branch in case["branch"].values())
-    assert all(branch["b_to"] > 0 for branch in case["branch"].values())
+    assert all(branch["b_fr"] >= 0 for branch in case["branch"].values())
+    assert all(branch["b_to"] >= 0 for branch in case["branch"].values())
     assert all(branch["b_us_per_km"] > 0 for branch in case["branch"].values())
+    inferred_transformer = next(branch for branch in case["branch"].values() if branch["source_id"] == "osm:way:10")
+    assert inferred_transformer["transformer"] is True
+    assert inferred_transformer["parameter_source"] == "inferred_transformer_voltage_pair_default"
+    assert inferred_transformer["transformer_inference"]["method"] == "clear_voltage_mismatch_branch_conversion"
+    assert case["_metadata"]["inferred_transformer_branch_count"] == 1
+    assert case["_metadata"]["synthetic_branch_count"] == 0
+    assert case["_metadata"]["voltage_inference"] == {
+        "tagged": 4,
+        "inferred": 0,
+        "unresolved": 0,
+        "inferred_by_voltage_kv": {},
+    }
     assert all(generator["model"] == 2 for generator in case["gen"].values())
     assert all(generator["ncost"] == 3 for generator in case["gen"].values())
     assert all(len(generator["cost"]) == 3 for generator in case["gen"].values())
@@ -82,7 +94,10 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
         "island_local_supply_equivalent",
     }
     assert all(bus["provenance"] in {"osm", "osm_branch_endpoint"} for bus in case["bus"].values())
-    assert all(branch["parameter_source"] == "osm_with_inferred_parameters" for branch in case["branch"].values())
+    assert {
+        branch["parameter_source"]
+        for branch in case["branch"].values()
+    } == {"osm_with_inferred_parameters", "inferred_transformer_voltage_pair_default"}
     assert all(load["provenance"] == "public_peak_demand_scaled_voltage_weighted_substation_split" for load in case["load"].values())
     assert all(load["allocation_method"] == "voltage_weighted_substation_split" for load in case["load"].values())
     assert case["_metadata"]["provenance_summary"]["branch"] == {"osm_with_inferred_parameters": 2}
@@ -181,6 +196,72 @@ def test_topology_preview_can_filter_known_low_voltage_assets() -> None:
     assert all(bus["base_kv"] >= 100.0 for bus in case["bus"].values())
 
 
+def test_powermodels_preview_infers_missing_bus_voltage_from_incident_branches() -> None:
+    rows = [
+        {
+            "osm_type": "node",
+            "osm_id": 90,
+            "power": "substation",
+            "name": "Untyped Alpha",
+            "voltage": None,
+            "operator": None,
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.52,
+            "lon": 114.30,
+            "tags_json": "{}",
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "node",
+            "osm_id": 91,
+            "power": "substation",
+            "name": "Untyped Beta",
+            "voltage": None,
+            "operator": None,
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.53,
+            "lon": 114.31,
+            "tags_json": "{}",
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "way",
+            "osm_id": 92,
+            "power": "line",
+            "name": "Untyped 400kV Corridor",
+            "voltage": "400000",
+            "operator": None,
+            "frequency": "50",
+            "cables": None,
+            "circuits": "1",
+            "location": None,
+            "lat": 22.525,
+            "lon": 114.305,
+            "tags_json": '{"voltage": "400000"}',
+            "geometry_json": '[{"lat": 22.52, "lon": 114.30}, {"lat": 22.53, "lon": 114.31}]',
+            "updated_at": "2026-01-01 00:00:00",
+        },
+    ]
+
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+
+    assert case["_metadata"]["voltage_inference"] == {
+        "tagged": 0,
+        "inferred": 2,
+        "unresolved": 0,
+        "inferred_by_voltage_kv": {"400.0": 2},
+    }
+    assert {bus["base_kv"] for bus in case["bus"].values()} == {400.0}
+
+
 def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
     rows = [
         *_sample_rows(),
@@ -220,7 +301,7 @@ def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
     assert tagged_export["cost_class"] == "thermal_gas"
 
 
-def test_powermodels_preview_adds_equivalent_generator_per_load_island() -> None:
+def test_powermodels_preview_connects_load_islands_with_synthetic_backbone() -> None:
     rows = [
         *_sample_rows(),
         {
@@ -242,16 +323,28 @@ def test_powermodels_preview_adds_equivalent_generator_per_load_island() -> None
         },
     ]
 
+    topology = build_topology_preview(rows, snap_tolerance_km=0.2)
     case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
     validation = validate_powermodels_case(case)
 
+    backbone = [
+        branch
+        for branch in topology["branches"]
+        if branch["provenance"] == "synthetic_service_territory_backbone"
+    ]
     equivalent_gens = [
         generator
         for generator in case["gen"].values()
         if generator["resource_type"] == "territory_capacity_equivalent"
     ]
-    assert len(equivalent_gens) == 3
-    assert validation["metrics"]["island_count"] == 3
+    assert topology["metadata"]["synthetic_service_territory_backbone_count"] == 1
+    assert len(backbone) == 1
+    assert backbone[0]["service_territory"] == "clp"
+    assert backbone[0]["provenance"] == "synthetic_service_territory_backbone"
+    assert case["_metadata"]["synthetic_branch_count"] == 1
+    assert case["_metadata"]["provenance_summary"]["branch"]["synthetic_service_territory_backbone"] == 1
+    assert len(equivalent_gens) == 2
+    assert validation["metrics"]["island_count"] == 2
     assert "load_island_without_generation" not in {error["code"] for error in validation["errors"]}
 
 
@@ -283,6 +376,7 @@ def test_powermodels_preview_drops_passive_components_from_solver_case() -> None
     assert topology["metadata"]["bus_count"] == 5
     assert case["_metadata"]["bus_count"] == 4
     assert case["_metadata"]["dropped_passive_bus_count"] == 1
+    assert case["_metadata"]["voltage_inference"]["unresolved"] == 0
     assert all(bus["source_id"] != "osm:node:80" for bus in case["bus"].values())
 
 
@@ -363,32 +457,18 @@ def test_powermodels_validation_reports_islands_and_capacity() -> None:
 
     validation = validate_powermodels_case(case)
 
-    assert validation["status"] == "warning"
+    assert validation["status"] == "ok"
     assert validation["metrics"]["island_count"] == 2
     assert validation["metrics"]["total_pd_mw"] == 9591.0
     assert validation["metrics"]["low_confidence_counts"] == {"branch": 0, "bus": 2, "gen": 2, "load": 4}
-    assert validation["metrics"]["branch_voltage_mismatch_count"] == 1
-    assert validation["metrics"]["severe_branch_voltage_mismatch_count"] == 1
+    assert validation["metrics"]["branch_voltage_mismatch_count"] == 0
+    assert validation["metrics"]["severe_branch_voltage_mismatch_count"] == 0
     assert validation["metrics"]["provenance_summary"]["load"] == {
         "public_peak_demand_scaled_voltage_weighted_substation_split": 4
     }
-    assert validation["voltage_mismatches"] == [
-        {
-            "branch_id": "1",
-            "source_id": "osm:way:10",
-            "branch_voltage_kv": 400.0,
-            "endpoints": [
-                {
-                    "endpoint": "t_bus",
-                    "bus_i": 2,
-                    "bus_base_kv": 132.0,
-                    "relative_difference": 0.67,
-                }
-            ],
-        }
-    ]
+    assert validation["voltage_mismatches"] == []
     assert validation["errors"] == []
-    assert "severe_branch_voltage_mismatch" in {warning["code"] for warning in validation["warnings"]}
+    assert validation["warnings"] == []
     assert all(island["reference_bus_count"] == 1 for island in validation["islands"])
 
 

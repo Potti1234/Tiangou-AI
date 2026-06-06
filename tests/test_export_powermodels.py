@@ -19,9 +19,9 @@ def test_export_powermodels_case_writes_json(tmp_path) -> None:
         snap_tolerance_km=0.2,
     )
 
-    assert result["validation"]["status"] == "warning"
-    assert "severe_branch_voltage_mismatch" in {warning["code"] for warning in result["validation"]["warnings"]}
+    assert result["validation"]["status"] == "ok"
     assert result["metadata"]["branch_count"] == 1
+    assert result["metadata"]["inferred_transformer_branch_count"] == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["baseMVA"] == 100.0
     assert payload["_metadata"]["total_pd_mw"] == 7336.0

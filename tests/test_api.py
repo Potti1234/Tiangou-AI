@@ -116,6 +116,10 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
             params={"include_hk_interties": True, "hk_intertie_derate": 0.5},
         )
         validation_response = client.get("/grid/topology/validation")
+        summary_response = client.get(
+            "/grid/topology/pipeline-summary",
+            params={"include_hk_interties": True, "min_voltage_kv": 100.0},
+        )
 
     assert ingest_response.status_code == 200
     assert preview_response.status_code == 200
@@ -124,6 +128,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert filtered_response.status_code == 200
     assert intertie_validation_response.status_code == 200
     assert validation_response.status_code == 200
+    assert summary_response.status_code == 200
     payload = preview_response.json()
     assert payload["baseMVA"] == 100.0
     assert payload["_metadata"]["branch_count"] == 1
@@ -134,6 +139,16 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert filtered_response.json()["_metadata"]["min_voltage_kv"] == 100.0
     assert intertie_validation_response.json()["metrics"]["island_count"] == 1
     validation_payload = validation_response.json()
-    assert validation_payload["status"] == "warning"
-    assert "severe_branch_voltage_mismatch" in {warning["code"] for warning in validation_payload["warnings"]}
+    assert validation_payload["status"] == "ok"
+    assert validation_payload["warnings"] == []
+    assert validation_payload["metrics"]["severe_branch_voltage_mismatch_count"] == 0
     assert validation_payload["metrics"]["low_confidence_counts"]["load"] == 2
+    summary_payload = summary_response.json()
+    assert summary_payload["stage_status"]["raw_osm"] == "complete"
+    assert summary_payload["stage_status"]["solver_topology"] == "complete"
+    assert summary_payload["stage_status"]["validation"] in {"ok", "warning", "error"}
+    assert summary_payload["raw_osm_counts_by_power"] == {"line": 1, "substation": 2}
+    assert summary_payload["topology_metadata"]["min_voltage_kv"] == 100.0
+    assert summary_payload["solver_metadata"]["branch_count"] == 1
+    assert summary_payload["validation"]["metrics"]["island_count"] == 1
+    assert summary_payload["handoff_artifacts"]["pyg_json"].endswith(".pyg.json")

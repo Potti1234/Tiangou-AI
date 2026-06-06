@@ -371,6 +371,8 @@ def build_topology_preview(
     if include_hk_interties:
         branches.extend(_hk_intertie_branches(buses, derate=hk_intertie_derate))
     load_allocations = _allocate_loads(buses, demand_snapshot=demand_snapshot)
+    backbone_branches = _synthetic_service_territory_backbone(buses, branches, load_allocations)
+    branches.extend(backbone_branches)
     return {
         "metadata": {
             "schema": "tiangou.topology_preview.v1",
@@ -387,6 +389,7 @@ def build_topology_preview(
             "branch_count": len(branches),
             "generator_count": len(generators),
             "load_count": len(load_allocations),
+            "synthetic_service_territory_backbone_count": len(backbone_branches),
         },
         "buses": buses,
         "branches": branches,
@@ -454,6 +457,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
     ]
     loads = [load for load in raw_loads if load["bus_id"] in active_bus_ids]
     tagged_generators = [generator for generator in tagged_generators if generator["bus_id"] in active_bus_ids]
+    voltage_inference = _infer_missing_bus_voltages(buses, branches)
     equivalent_generators = _equivalent_generators(buses, branches, loads)
     all_generators = [*tagged_generators, *equivalent_generators]
 
@@ -485,9 +489,10 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "voltage_band": bus.get("voltage_band"),
         }
 
+    bus_by_id = {bus["id"]: bus for bus in buses}
     branch_dict = {}
     for index, branch in enumerate(branches, start=1):
-        branch_dict[str(index)] = _powermodels_branch(index, branch, bus_id_map)
+        branch_dict[str(index)] = _powermodels_branch(index, branch, bus_id_map, bus_by_id)
 
     load_dict = {}
     for index, load in enumerate(loads, start=1):
@@ -568,6 +573,9 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "dropped_passive_branch_count": len(raw_branches) - len(branches),
             "tagged_gen_count": len(tagged_generators),
             "equivalent_gen_count": len(equivalent_generators),
+            "synthetic_branch_count": sum(1 for branch in branches if _is_synthetic_branch(branch)),
+            "inferred_transformer_branch_count": sum(1 for branch in branch_dict.values() if branch.get("transformer")),
+            "voltage_inference": voltage_inference,
             "reference_bus_count": len(reference_bus_ids),
             "total_pd_mw": round(sum(load["pd_mw"] for load in loads), 3),
             "total_tagged_pmax_mw": round(sum(gen["pmax_mw"] for gen in tagged_generators), 3),
@@ -603,6 +611,61 @@ def _active_preview_bus_ids(
         if component & seed_bus_ids:
             active_bus_ids.update(component)
     return active_bus_ids
+
+
+def _infer_missing_bus_voltages(
+    buses: list[dict[str, Any]],
+    branches: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    incident_voltages: dict[str, list[float]] = {bus["id"]: [] for bus in buses}
+    for branch in branches:
+        voltage_kv = branch.get("voltage_kv")
+        if voltage_kv is None:
+            continue
+        for endpoint in (branch.get("from_bus_id"), branch.get("to_bus_id")):
+            if endpoint in incident_voltages:
+                incident_voltages[str(endpoint)].append(float(voltage_kv))
+
+    tagged_count = 0
+    inferred_count = 0
+    unresolved_count = 0
+    by_voltage: dict[str, int] = {}
+    for bus in buses:
+        if bus.get("base_kv") is not None:
+            tagged_count += 1
+            continue
+
+        candidates = incident_voltages.get(bus["id"], [])
+        if not candidates:
+            unresolved_count += 1
+            continue
+
+        inferred_voltage = _consensus_voltage(candidates)
+        bus["base_kv"] = inferred_voltage
+        bus["voltage_band"] = voltage_band(inferred_voltage)
+        bus["voltage_inference"] = {
+            "method": "incident_branch_voltage_consensus",
+            "candidate_voltages_kv": sorted(set(candidates)),
+            "sample_count": len(candidates),
+        }
+        bus["confidence"] = max(float(bus.get("confidence") or 0.0), 0.5 if len(set(candidates)) > 1 else 0.6)
+        inferred_count += 1
+        key = str(round(inferred_voltage, 3))
+        by_voltage[key] = by_voltage.get(key, 0) + 1
+
+    return {
+        "tagged": tagged_count,
+        "inferred": inferred_count,
+        "unresolved": unresolved_count,
+        "inferred_by_voltage_kv": dict(sorted(by_voltage.items(), key=lambda item: float(item[0]))),
+    }
+
+
+def _consensus_voltage(values: list[float]) -> float:
+    counts: dict[float, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return max(sorted(counts), key=lambda value: (counts[value], value))
 
 
 def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
@@ -855,6 +918,8 @@ def _branch_voltage_mismatches(
     }
     mismatches = []
     for branch_id, branch in branches.items():
+        if branch.get("transformer"):
+            continue
         branch_voltage = branch.get("matched_voltage_kv")
         if branch_voltage is None:
             continue
@@ -953,21 +1018,37 @@ def _powermodels_branch(
     index: int,
     branch: Mapping[str, Any],
     bus_id_map: Mapping[str, str],
+    bus_by_id: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
     voltage_kv = branch.get("voltage_kv") or 132.0
     length_km = branch.get("length_km") or 1.0
     defaults = branch.get("parameter_defaults") or {}
-    r_ohm = (defaults.get("r_ohm_per_km") or 0.08) * length_km
-    x_ohm = (defaults.get("x_ohm_per_km") or 0.42) * length_km
-    z_base_ohm = (voltage_kv * voltage_kv) / BASE_MVA
-    charging_pu = _branch_charging_pu(defaults, length_km, z_base_ohm)
+    transformer_info = _inferred_transformer_info(branch, bus_by_id)
+    if transformer_info is None:
+        r_ohm = (defaults.get("r_ohm_per_km") or 0.08) * length_km
+        x_ohm = (defaults.get("x_ohm_per_km") or 0.42) * length_km
+        z_base_ohm = (voltage_kv * voltage_kv) / BASE_MVA
+        br_r = round(max(r_ohm / z_base_ohm, 0.00001), 8)
+        br_x = round(max(x_ohm / z_base_ohm, 0.00001), 8)
+        charging_pu = _branch_charging_pu(defaults, length_km, z_base_ohm)
+        transformer = False
+        parameter_source = branch.get("provenance")
+        tap = 1.0
+    else:
+        transformer_defaults = _transformer_defaults(transformer_info["high_kv"], transformer_info["low_kv"])
+        br_r = transformer_defaults["br_r"]
+        br_x = transformer_defaults["br_x"]
+        charging_pu = 0.0
+        transformer = True
+        parameter_source = transformer_defaults["parameter_source"]
+        tap = 1.0
 
     return {
         "index": index,
         "f_bus": int(bus_id_map[str(branch["from_bus_id"])]),
         "t_bus": int(bus_id_map[str(branch["to_bus_id"])]),
-        "br_r": round(max(r_ohm / z_base_ohm, 0.00001), 8),
-        "br_x": round(max(x_ohm / z_base_ohm, 0.00001), 8),
+        "br_r": br_r,
+        "br_x": br_x,
         "g_fr": 0.0,
         "g_to": 0.0,
         "b_fr": charging_pu,
@@ -975,20 +1056,75 @@ def _powermodels_branch(
         "rate_a": defaults.get("rate_mva") or 100.0,
         "rate_b": defaults.get("rate_mva") or 100.0,
         "rate_c": defaults.get("rate_mva") or 100.0,
-        "tap": 1.0,
+        "tap": tap,
         "shift": 0.0,
         "br_status": 1,
         "angmin": -0.523599,
         "angmax": 0.523599,
-        "transformer": False,
+        "transformer": transformer,
         "source_id": branch["id"],
         "provenance": branch.get("provenance"),
         "confidence": branch.get("confidence"),
-        "parameter_source": branch.get("provenance"),
+        "parameter_source": parameter_source,
         "matched_voltage_kv": defaults.get("matched_voltage_kv"),
         "b_us_per_km": defaults.get("b_us_per_km"),
         "length_km": length_km,
+        **({"transformer_inference": transformer_info} if transformer_info is not None else {}),
     }
+
+
+def _inferred_transformer_info(
+    branch: Mapping[str, Any],
+    bus_by_id: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    from_bus = bus_by_id.get(str(branch.get("from_bus_id")))
+    to_bus = bus_by_id.get(str(branch.get("to_bus_id")))
+    if from_bus is None or to_bus is None:
+        return None
+    if branch.get("power") == "intertie" or branch.get("provenance") == "public_interconnection_capacity_equivalent":
+        return None
+    from_kv = from_bus.get("base_kv")
+    to_kv = to_bus.get("base_kv")
+    branch_kv = branch.get("voltage_kv")
+    if from_kv is None or to_kv is None or branch_kv is None:
+        return None
+    from_kv = float(from_kv)
+    to_kv = float(to_kv)
+    branch_kv = float(branch_kv)
+    if min(from_kv, to_kv, branch_kv) <= 0:
+        return None
+
+    endpoint_ratio = max(from_kv, to_kv) / min(from_kv, to_kv)
+    from_branch_delta = abs(from_kv - branch_kv) / branch_kv
+    to_branch_delta = abs(to_kv - branch_kv) / branch_kv
+    severe_branch_mismatch = max(from_branch_delta, to_branch_delta) >= 0.5
+    if endpoint_ratio < 1.5 or not severe_branch_mismatch:
+        return None
+
+    return {
+        "method": "clear_voltage_mismatch_branch_conversion",
+        "from_bus_base_kv": from_kv,
+        "to_bus_base_kv": to_kv,
+        "branch_voltage_kv": branch_kv,
+        "high_kv": max(from_kv, to_kv),
+        "low_kv": min(from_kv, to_kv),
+        "confidence": 0.55,
+    }
+
+
+def _transformer_defaults(high_kv: float, low_kv: float) -> dict[str, Any]:
+    ratio = high_kv / low_kv if low_kv else 1.0
+    base_x = 0.08 if ratio < 3.0 else 0.1
+    return {
+        "br_r": 0.005,
+        "br_x": round(base_x, 6),
+        "parameter_source": "inferred_transformer_voltage_pair_default",
+    }
+
+
+def _is_synthetic_branch(branch: Mapping[str, Any]) -> bool:
+    provenance = str(branch.get("provenance") or "")
+    return str(branch.get("id") or "").startswith("synthetic:") or "synthetic" in provenance or "public_interconnection" in provenance
 
 
 def _branch_charging_pu(defaults: Mapping[str, Any], length_km: float, z_base_ohm: float) -> float:
@@ -1065,6 +1201,149 @@ def _hk_intertie_branches(
             "confidence": 0.5,
         }
     ]
+
+
+def _synthetic_service_territory_backbone(
+    buses: list[dict[str, Any]],
+    branches: list[Mapping[str, Any]],
+    loads: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    load_totals_by_bus: dict[str, float] = {}
+    territory_by_bus: dict[str, str] = {}
+    for load in loads:
+        bus_id = load["bus_id"]
+        load_totals_by_bus[bus_id] = load_totals_by_bus.get(bus_id, 0.0) + float(load["pd_mw"])
+        territory_by_bus[bus_id] = load["service_territory"]
+
+    if not load_totals_by_bus:
+        return []
+
+    bus_by_id = {bus["id"]: bus for bus in buses}
+    components = _preview_components(buses, branches)
+    component_by_bus = {
+        bus_id: index
+        for index, component in enumerate(components)
+        for bus_id in component
+    }
+    load_components_by_territory: dict[str, dict[int, float]] = {}
+    for bus_id, total_mw in load_totals_by_bus.items():
+        territory = territory_by_bus.get(bus_id)
+        component_index = component_by_bus.get(bus_id)
+        if territory is None or component_index is None:
+            continue
+        component_loads = load_components_by_territory.setdefault(territory, {})
+        component_loads[component_index] = component_loads.get(component_index, 0.0) + total_mw
+
+    synthetic_branches = []
+    for territory, component_loads in sorted(load_components_by_territory.items()):
+        if len(component_loads) < 2:
+            continue
+        hub_component_index = max(
+            sorted(component_loads),
+            key=lambda index: (component_loads[index], _component_max_voltage(components[index], bus_by_id)),
+        )
+        hub_bus = _best_backbone_bus(components[hub_component_index], bus_by_id, territory=territory)
+        if hub_bus is None:
+            continue
+
+        for component_index in sorted(component_loads):
+            if component_index == hub_component_index:
+                continue
+            target_bus = _best_backbone_bus(
+                components[component_index],
+                bus_by_id,
+                territory=territory,
+                preferred_voltage_kv=hub_bus.get("base_kv"),
+            )
+            if target_bus is None:
+                continue
+            voltage_kv = _backbone_voltage_kv(hub_bus, target_bus)
+            length_km = _branch_length_between_buses(hub_bus, target_bus)
+            defaults = _branch_defaults("cable", voltage_kv)
+            if defaults.get("rate_mva") is not None:
+                defaults["rate_mva"] = max(float(defaults["rate_mva"]), component_loads[component_index] * 1.25)
+            synthetic_branches.append(
+                {
+                    "id": f"synthetic:service-backbone:{territory}:{len(synthetic_branches) + 1}",
+                    "source": {
+                        "kind": "synthetic_service_territory_backbone",
+                        "territory": territory,
+                        "hub_component_index": hub_component_index,
+                        "target_component_index": component_index,
+                    },
+                    "name": f"{territory} synthetic service-territory backbone",
+                    "power": "cable",
+                    "from_bus_id": hub_bus["id"],
+                    "to_bus_id": target_bus["id"],
+                    "voltage_kv": voltage_kv,
+                    "voltage_band": voltage_band(voltage_kv),
+                    "length_km": length_km,
+                    "location": "underground_equivalent",
+                    "circuits": None,
+                    "cables": None,
+                    "parameter_defaults": defaults,
+                    "endpoint_quality": [
+                        {"snap": "synthetic_backbone_hub", "bus_id": hub_bus["id"]},
+                        {"snap": "synthetic_backbone_target", "bus_id": target_bus["id"]},
+                    ],
+                    "provenance": "synthetic_service_territory_backbone",
+                    "service_territory": territory,
+                    "connected_load_mw": round(component_loads[component_index], 3),
+                    "confidence": 0.3,
+                }
+            )
+
+    return synthetic_branches
+
+
+def _component_max_voltage(component: set[str], bus_by_id: Mapping[str, Mapping[str, Any]]) -> float:
+    return max((float(bus_by_id[bus_id].get("base_kv") or 0.0) for bus_id in component if bus_id in bus_by_id), default=0.0)
+
+
+def _best_backbone_bus(
+    component: set[str],
+    bus_by_id: Mapping[str, Mapping[str, Any]],
+    *,
+    territory: str,
+    preferred_voltage_kv: float | None = None,
+) -> dict[str, Any] | None:
+    candidates = [bus_by_id[bus_id] for bus_id in component if bus_id in bus_by_id]
+    if not candidates:
+        return None
+    territory_candidates = [bus for bus in candidates if bus.get("service_territory") == territory]
+    if territory_candidates:
+        candidates = territory_candidates
+
+    def score(bus: Mapping[str, Any]) -> tuple[float, float, float]:
+        voltage = float(bus.get("base_kv") or 0.0)
+        if preferred_voltage_kv is None or voltage <= 0:
+            voltage_match = 0.0
+        else:
+            voltage_match = -abs(voltage - float(preferred_voltage_kv))
+        has_coordinates = 1.0 if bus.get("lat") is not None and bus.get("lon") is not None else 0.0
+        return (voltage_match, voltage, has_coordinates)
+
+    return dict(max(candidates, key=score))
+
+
+def _backbone_voltage_kv(from_bus: Mapping[str, Any], to_bus: Mapping[str, Any]) -> float:
+    from_kv = float(from_bus.get("base_kv") or 132.0)
+    to_kv = float(to_bus.get("base_kv") or from_kv)
+    if from_kv == to_kv:
+        return from_kv
+    return min(from_kv, to_kv)
+
+
+def _branch_length_between_buses(from_bus: Mapping[str, Any], to_bus: Mapping[str, Any]) -> float:
+    if from_bus.get("lat") is None or from_bus.get("lon") is None or to_bus.get("lat") is None or to_bus.get("lon") is None:
+        return 1.0
+    return max(
+        _haversine_km(
+            (float(from_bus["lat"]), float(from_bus["lon"])),
+            (float(to_bus["lat"]), float(to_bus["lon"])),
+        ),
+        0.1,
+    )
 
 
 def _best_intertie_bus(

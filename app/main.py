@@ -23,6 +23,7 @@ from app.topology import (
     build_powermodels_preview,
     build_powermodels_validation,
     build_topology_preview,
+    validate_powermodels_case,
 )
 
 
@@ -263,3 +264,87 @@ def topology_validation(
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
     )
+
+
+@app.get("/grid/topology/pipeline-summary")
+def topology_pipeline_summary(
+    region_key: str = "hong-kong",
+    snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
+    demand_snapshot: str = Query(default="peak_16h", pattern=DEMAND_SNAPSHOT_PATTERN),
+    include_hk_interties: bool = False,
+    hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
+    min_voltage_kv: float | None = Query(default=100.0, gt=0.0),
+) -> dict[str, Any]:
+    try:
+        get_region(region_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    with get_db() as conn:
+        rows = list_elements(
+            conn,
+            region_key=region_key,
+            limit=100000,
+        )
+
+    topology = build_topology_preview(
+        rows,
+        snap_tolerance_km=snap_tolerance_km,
+        demand_snapshot=demand_snapshot,
+        include_hk_interties=include_hk_interties,
+        hk_intertie_derate=hk_intertie_derate,
+        min_voltage_kv=min_voltage_kv,
+    )
+    case = build_powermodels_preview(
+        rows,
+        snap_tolerance_km=snap_tolerance_km,
+        demand_snapshot=demand_snapshot,
+        include_hk_interties=include_hk_interties,
+        hk_intertie_derate=hk_intertie_derate,
+        min_voltage_kv=min_voltage_kv,
+    )
+    validation = validate_powermodels_case(case)
+
+    raw_counts = {}
+    for row in rows:
+        power = row["power"]
+        raw_counts[power] = raw_counts.get(power, 0) + 1
+
+    stage_status = {
+        "raw_osm": "complete" if rows else "not_run",
+        "reconstructed_circuits": "complete" if topology["metadata"]["branch_count"] else "warning",
+        "solver_topology": "complete" if case["_metadata"]["bus_count"] else "not_run",
+        "validation": validation["status"],
+        "handoff_artifacts": "not_run",
+    }
+    if not rows:
+        stage_status["reconstructed_circuits"] = "not_run"
+        stage_status["validation"] = "not_run"
+
+    return {
+        "region_key": region_key,
+        "parameters": {
+            "snap_tolerance_km": snap_tolerance_km,
+            "demand_snapshot": demand_snapshot,
+            "include_hk_interties": include_hk_interties,
+            "hk_intertie_derate": hk_intertie_derate,
+            "min_voltage_kv": min_voltage_kv,
+        },
+        "stage_status": stage_status,
+        "raw_osm_counts_by_power": dict(sorted(raw_counts.items())),
+        "topology_metadata": topology["metadata"],
+        "quality": topology["quality"],
+        "solver_metadata": case["_metadata"],
+        "validation": {
+            "status": validation["status"],
+            "errors": validation["errors"],
+            "warnings": validation["warnings"],
+            "metrics": validation["metrics"],
+        },
+        "handoff_artifacts": {
+            "raw_json": "data/processed/hong_kong_16h_model.json",
+            "solvable_json": "data/processed/hong_kong_16h_model.solvable.json",
+            "pyg_json": "data/processed/hong_kong_16h_model.pyg.json",
+            "scenarios": "data/processed/scenarios",
+        },
+    }
