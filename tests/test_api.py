@@ -105,7 +105,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
         )
         intertie_validation_response = client.get(
             "/grid/topology/validation",
-            params={"include_hk_interties": True},
+            params={"include_hk_interties": True, "hk_intertie_derate": 0.5},
         )
         validation_response = client.get("/grid/topology/validation")
 

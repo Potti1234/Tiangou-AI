@@ -54,6 +54,7 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
         output_dir=output_dir,
         snap_tolerance_km=0.2,
         include_hk_interties=True,
+        hk_intertie_derate=0.5,
     )
 
     peak_path = output_dir / "hong_kong_16h_model.json"
@@ -63,6 +64,7 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert overnight_path.exists()
     assert manifest_path.exists()
     assert result["include_hk_interties"] is True
+    assert result["hk_intertie_derate"] == 0.5
     assert len(result["exports"]) == 2
 
     peak = json.loads(peak_path.read_text(encoding="utf-8"))
@@ -71,6 +73,7 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert peak["demand_snapshot"] == "peak_16h"
     assert overnight["demand_snapshot"] == "overnight_04h"
     assert peak["_metadata"]["include_hk_interties"] is True
+    assert peak["_metadata"]["hk_intertie_derate"] == 0.5
     assert manifest["exports"][0]["validation"]["status"] == "ok"
 
 

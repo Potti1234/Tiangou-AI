@@ -141,6 +141,37 @@ def test_powermodels_preview_can_include_hk_intertie() -> None:
     assert validation["metrics"]["island_count"] == 1
 
 
+def test_powermodels_preview_can_derate_hk_intertie() -> None:
+    topology = build_topology_preview(
+        _sample_rows(),
+        snap_tolerance_km=0.2,
+        include_hk_interties=True,
+        hk_intertie_derate=0.5,
+    )
+    case = build_powermodels_preview(
+        _sample_rows(),
+        snap_tolerance_km=0.2,
+        include_hk_interties=True,
+        hk_intertie_derate=0.5,
+    )
+
+    intertie = next(branch for branch in topology["branches"] if branch["id"] == "synthetic:intertie:clp-hk-electric")
+    exported_intertie = next(branch for branch in case["branch"].values() if branch["source_id"] == intertie["id"])
+    assert intertie["derate_factor"] == 0.5
+    assert intertie["parameter_defaults"]["rate_mva"] == 360.0
+    assert case["_metadata"]["hk_intertie_derate"] == 0.5
+    assert exported_intertie["rate_a"] == 360.0
+
+
+def test_topology_preview_rejects_invalid_derate() -> None:
+    try:
+        build_topology_preview(_sample_rows(), hk_intertie_derate=0.0)
+    except ValueError as exc:
+        assert "Derate factor" in str(exc)
+    else:
+        raise AssertionError("Expected invalid derate to raise ValueError")
+
+
 def test_topology_preview_rejects_unknown_demand_snapshot() -> None:
     try:
         build_topology_preview(_sample_rows(), demand_snapshot="lunch")

@@ -16,6 +16,7 @@ def export_powermodels_case(
     snap_tolerance_km: float = 0.75,
     demand_snapshot: str = "peak_16h",
     include_hk_interties: bool = False,
+    hk_intertie_derate: float = 1.0,
     allow_validation_errors: bool = False,
 ) -> dict[str, Any]:
     with connect(database_path) as conn:
@@ -26,6 +27,7 @@ def export_powermodels_case(
         snap_tolerance_km=snap_tolerance_km,
         demand_snapshot=demand_snapshot,
         include_hk_interties=include_hk_interties,
+        hk_intertie_derate=hk_intertie_derate,
     )
     validation = validate_powermodels_case(case)
     if validation["status"] == "error" and not allow_validation_errors:
@@ -39,6 +41,7 @@ def export_powermodels_case(
         "region_key": region_key,
         "demand_snapshot": demand_snapshot,
         "include_hk_interties": include_hk_interties,
+        "hk_intertie_derate": hk_intertie_derate,
         "validation": validation,
         "metadata": case["_metadata"],
     }
@@ -50,6 +53,7 @@ def export_hong_kong_phase1_bundle(
     output_dir: Path,
     snap_tolerance_km: float = 0.75,
     include_hk_interties: bool = False,
+    hk_intertie_derate: float = 1.0,
     allow_validation_errors: bool = False,
 ) -> dict[str, Any]:
     exports = []
@@ -65,6 +69,7 @@ def export_hong_kong_phase1_bundle(
                 snap_tolerance_km=snap_tolerance_km,
                 demand_snapshot=demand_snapshot,
                 include_hk_interties=include_hk_interties,
+                hk_intertie_derate=hk_intertie_derate,
                 allow_validation_errors=allow_validation_errors,
             )
         )
@@ -72,6 +77,7 @@ def export_hong_kong_phase1_bundle(
     manifest = {
         "region_key": "hong-kong",
         "include_hk_interties": include_hk_interties,
+        "hk_intertie_derate": hk_intertie_derate,
         "exports": exports,
     }
     manifest_path = output_dir / "hong_kong_phase1_manifest.json"
@@ -86,6 +92,7 @@ def main() -> None:
     parser.add_argument("--region-key", default="hong-kong")
     parser.add_argument("--snap-tolerance-km", type=float, default=0.75)
     parser.add_argument("--demand-snapshot", choices=sorted(DEMAND_SNAPSHOTS), default="peak_16h")
+    parser.add_argument("--hk-intertie-derate", type=float, default=1.0)
     parser.add_argument(
         "--include-hk-interties",
         action="store_true",
@@ -109,6 +116,7 @@ def main() -> None:
             output_dir=args.output_path,
             snap_tolerance_km=args.snap_tolerance_km,
             include_hk_interties=args.include_hk_interties,
+            hk_intertie_derate=args.hk_intertie_derate,
             allow_validation_errors=args.allow_validation_errors,
         )
     else:
@@ -119,6 +127,7 @@ def main() -> None:
             snap_tolerance_km=args.snap_tolerance_km,
             demand_snapshot=args.demand_snapshot,
             include_hk_interties=args.include_hk_interties,
+            hk_intertie_derate=args.hk_intertie_derate,
             allow_validation_errors=args.allow_validation_errors,
         )
     print(json.dumps(result, indent=2, sort_keys=True))

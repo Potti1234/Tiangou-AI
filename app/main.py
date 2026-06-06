@@ -177,6 +177,7 @@ def topology_preview(
     snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
     demand_snapshot: str = Query(default="peak_16h", pattern="^(peak_16h|overnight_04h)$"),
     include_hk_interties: bool = False,
+    hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -194,6 +195,7 @@ def topology_preview(
         snap_tolerance_km=snap_tolerance_km,
         demand_snapshot=demand_snapshot,
         include_hk_interties=include_hk_interties,
+        hk_intertie_derate=hk_intertie_derate,
     )
 
 
@@ -203,6 +205,7 @@ def powermodels_preview(
     snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
     demand_snapshot: str = Query(default="peak_16h", pattern="^(peak_16h|overnight_04h)$"),
     include_hk_interties: bool = False,
+    hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -220,6 +223,7 @@ def powermodels_preview(
         snap_tolerance_km=snap_tolerance_km,
         demand_snapshot=demand_snapshot,
         include_hk_interties=include_hk_interties,
+        hk_intertie_derate=hk_intertie_derate,
     )
 
 
@@ -229,6 +233,7 @@ def topology_validation(
     snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
     demand_snapshot: str = Query(default="peak_16h", pattern="^(peak_16h|overnight_04h)$"),
     include_hk_interties: bool = False,
+    hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -246,4 +251,5 @@ def topology_validation(
         snap_tolerance_km=snap_tolerance_km,
         demand_snapshot=demand_snapshot,
         include_hk_interties=include_hk_interties,
+        hk_intertie_derate=hk_intertie_derate,
     )

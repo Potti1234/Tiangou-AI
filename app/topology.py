@@ -240,7 +240,9 @@ def build_topology_preview(
     snap_tolerance_km: float = 0.75,
     demand_snapshot: str = "peak_16h",
     include_hk_interties: bool = False,
+    hk_intertie_derate: float = 1.0,
 ) -> dict[str, Any]:
+    _validate_derate(hk_intertie_derate)
     snapshot = _demand_snapshot(demand_snapshot)
     records = [_row_to_record(row) for row in rows]
     buses: list[dict[str, Any]] = []
@@ -353,7 +355,7 @@ def build_topology_preview(
 
     buses.extend(synthetic_buses.values())
     if include_hk_interties:
-        branches.extend(_hk_intertie_branches(buses))
+        branches.extend(_hk_intertie_branches(buses, derate=hk_intertie_derate))
     load_allocations = _allocate_loads(buses, demand_snapshot=demand_snapshot)
     return {
         "metadata": {
@@ -363,6 +365,7 @@ def build_topology_preview(
             "demand_snapshot_label": snapshot["label"],
             "load_factor": snapshot["load_factor"],
             "include_hk_interties": include_hk_interties,
+            "hk_intertie_derate": hk_intertie_derate,
             "bus_count": len(buses),
             "branch_count": len(branches),
             "generator_count": len(generators),
@@ -382,12 +385,14 @@ def build_powermodels_preview(
     snap_tolerance_km: float = 0.75,
     demand_snapshot: str = "peak_16h",
     include_hk_interties: bool = False,
+    hk_intertie_derate: float = 1.0,
 ) -> dict[str, Any]:
     topology = build_topology_preview(
         rows,
         snap_tolerance_km=snap_tolerance_km,
         demand_snapshot=demand_snapshot,
         include_hk_interties=include_hk_interties,
+        hk_intertie_derate=hk_intertie_derate,
     )
     return topology_preview_to_powermodels(topology)
 
@@ -398,12 +403,14 @@ def build_powermodels_validation(
     snap_tolerance_km: float = 0.75,
     demand_snapshot: str = "peak_16h",
     include_hk_interties: bool = False,
+    hk_intertie_derate: float = 1.0,
 ) -> dict[str, Any]:
     case = build_powermodels_preview(
         rows,
         snap_tolerance_km=snap_tolerance_km,
         demand_snapshot=demand_snapshot,
         include_hk_interties=include_hk_interties,
+        hk_intertie_derate=hk_intertie_derate,
     )
     return validate_powermodels_case(case)
 
@@ -483,6 +490,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
         "source_version": "tiangou.powermodels_preview.v1",
         "demand_snapshot": topology["metadata"]["demand_snapshot"],
         "include_hk_interties": topology["metadata"]["include_hk_interties"],
+        "hk_intertie_derate": topology["metadata"]["hk_intertie_derate"],
         "baseMVA": BASE_MVA,
         "per_unit": True,
         "bus": bus_dict,
@@ -499,6 +507,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "demand_snapshot_label": topology["metadata"]["demand_snapshot_label"],
             "load_factor": topology["metadata"]["load_factor"],
             "include_hk_interties": topology["metadata"]["include_hk_interties"],
+            "hk_intertie_derate": topology["metadata"]["hk_intertie_derate"],
             "bus_count": len(bus_dict),
             "branch_count": len(branch_dict),
             "load_count": len(load_dict),
@@ -796,7 +805,16 @@ def _powermodels_branch(
     }
 
 
-def _hk_intertie_branches(buses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _validate_derate(derate: float) -> None:
+    if derate <= 0 or derate > 1:
+        raise ValueError("Derate factor must be greater than 0 and less than or equal to 1.")
+
+
+def _hk_intertie_branches(
+    buses: list[dict[str, Any]],
+    *,
+    derate: float,
+) -> list[dict[str, Any]]:
     clp_bus = _best_intertie_bus(buses, "clp")
     hke_bus = _best_intertie_bus(buses, "hk-electric")
     if clp_bus is None or hke_bus is None:
@@ -830,7 +848,7 @@ def _hk_intertie_branches(buses: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "parameter_defaults": {
                 "r_ohm_per_km": 0.055,
                 "x_ohm_per_km": 0.16,
-                "rate_mva": HK_INTERTIE_RATE_MVA,
+                "rate_mva": round(HK_INTERTIE_RATE_MVA * derate, 3),
                 "matched_voltage_kv": 132.0,
             },
             "endpoint_quality": [
@@ -838,6 +856,8 @@ def _hk_intertie_branches(buses: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 {"snap": "synthetic_public_intertie", "bus_id": hke_bus["id"]},
             ],
             "provenance": "public_interconnection_capacity_equivalent",
+            "derate_factor": derate,
+            "nominal_rate_mva": HK_INTERTIE_RATE_MVA,
             "confidence": 0.5,
         }
     ]

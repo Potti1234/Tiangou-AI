@@ -82,6 +82,12 @@ Add the public 720 MVA CLP-HK Electric interconnection when building an optimiza
 python -m app.export_powermodels data/processed/hong_kong_16h_model.json --include-hk-interties
 ```
 
+Derate that interconnection for transfer-stress cases:
+
+```powershell
+python -m app.export_powermodels data/processed/hong_kong_16h_model.json --include-hk-interties --hk-intertie-derate 0.5
+```
+
 Write both Phase 1 Hong Kong snapshots plus a manifest:
 
 ```powershell
