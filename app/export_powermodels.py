@@ -54,8 +54,12 @@ def export_hong_kong_phase1_bundle(
     snap_tolerance_km: float = 0.75,
     include_hk_interties: bool = False,
     hk_intertie_derate: float = 1.0,
+    n_per_mode: int = 1,
     allow_validation_errors: bool = False,
 ) -> dict[str, Any]:
+    if n_per_mode < 1:
+        raise ValueError("n_per_mode must be at least 1.")
+
     exports = []
     for demand_snapshot, filename in (
         ("peak_16h", "hong_kong_16h_model.json"),
@@ -78,15 +82,21 @@ def export_hong_kong_phase1_bundle(
         "region_key": "hong-kong",
         "include_hk_interties": include_hk_interties,
         "hk_intertie_derate": hk_intertie_derate,
+        "n_per_mode": n_per_mode,
         "exports": exports,
     }
-    manifest["solver_handoff"] = _write_solver_handoff(output_dir, exports)
+    manifest["solver_handoff"] = _write_solver_handoff(output_dir, exports, n_per_mode=n_per_mode)
     manifest_path = output_dir / "hong_kong_phase1_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     return {**manifest, "manifest_path": str(manifest_path)}
 
 
-def _write_solver_handoff(output_dir: Path, exports: list[dict[str, Any]]) -> dict[str, Any]:
+def _write_solver_handoff(
+    output_dir: Path,
+    exports: list[dict[str, Any]],
+    *,
+    n_per_mode: int,
+) -> dict[str, Any]:
     solvable_paths = [
         str(Path(export["output_path"]).with_suffix("").with_suffix(".solvable.json"))
         for export in exports
@@ -97,7 +107,10 @@ def _write_solver_handoff(output_dir: Path, exports: list[dict[str, Any]]) -> di
     ]
 
     grids_solvable_path = output_dir / "grids_solvable.txt"
-    grids_solvable_path.write_text("\n".join(solvable_paths) + "\n", encoding="utf-8")
+    grids_solvable_path.write_text(
+        "\n".join(f"{solvable_path} {n_per_mode}" for solvable_path in solvable_paths) + "\n",
+        encoding="utf-8",
+    )
 
     script_path = output_dir / "run_hong_kong_solver_pipeline.ps1"
     lines = [
@@ -129,6 +142,7 @@ def _write_solver_handoff(output_dir: Path, exports: list[dict[str, Any]]) -> di
         "grids_solvable_path": str(grids_solvable_path),
         "solvable_paths": solvable_paths,
         "pyg_paths": pyg_paths,
+        "n_per_mode": n_per_mode,
     }
 
 
@@ -140,6 +154,7 @@ def main() -> None:
     parser.add_argument("--snap-tolerance-km", type=float, default=0.75)
     parser.add_argument("--demand-snapshot", choices=sorted(DEMAND_SNAPSHOTS), default="peak_16h")
     parser.add_argument("--hk-intertie-derate", type=float, default=1.0)
+    parser.add_argument("--n-per-mode", type=int, default=1)
     parser.add_argument(
         "--include-hk-interties",
         action="store_true",
@@ -164,6 +179,7 @@ def main() -> None:
             snap_tolerance_km=args.snap_tolerance_km,
             include_hk_interties=args.include_hk_interties,
             hk_intertie_derate=args.hk_intertie_derate,
+            n_per_mode=args.n_per_mode,
             allow_validation_errors=args.allow_validation_errors,
         )
     else:

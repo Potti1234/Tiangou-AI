@@ -55,6 +55,7 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
         snap_tolerance_km=0.2,
         include_hk_interties=True,
         hk_intertie_derate=0.5,
+        n_per_mode=3,
     )
 
     peak_path = output_dir / "hong_kong_16h_model.json"
@@ -69,6 +70,7 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert grids_solvable_path.exists()
     assert result["include_hk_interties"] is True
     assert result["hk_intertie_derate"] == 0.5
+    assert result["n_per_mode"] == 3
     assert len(result["exports"]) == 2
 
     peak = json.loads(peak_path.read_text(encoding="utf-8"))
@@ -81,12 +83,26 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert "solve_topo_json.jl" in handoff_path.read_text(encoding="utf-8")
     assert "gen_perturbed_data.jl" in handoff_path.read_text(encoding="utf-8")
     assert grids_solvable_path.read_text(encoding="utf-8").splitlines() == [
-        str(output_dir / "hong_kong_16h_model.solvable.json"),
-        str(output_dir / "hong_kong_04h_model.solvable.json"),
+        f"{output_dir / 'hong_kong_16h_model.solvable.json'} 3",
+        f"{output_dir / 'hong_kong_04h_model.solvable.json'} 3",
     ]
     assert manifest["solver_handoff"]["script_path"] == str(handoff_path)
     assert manifest["solver_handoff"]["grids_solvable_path"] == str(grids_solvable_path)
+    assert manifest["solver_handoff"]["n_per_mode"] == 3
     assert manifest["exports"][0]["validation"]["status"] == "ok"
+
+
+def test_export_hong_kong_phase1_bundle_rejects_invalid_scenario_count(tmp_path) -> None:
+    db_path = tmp_path / "grid.sqlite3"
+    init_db(db_path)
+
+    with pytest.raises(ValueError, match="n_per_mode"):
+        export_hong_kong_phase1_bundle(
+            database_path=db_path,
+            output_dir=tmp_path / "processed",
+            n_per_mode=0,
+            allow_validation_errors=True,
+        )
 
 
 def test_export_powermodels_case_blocks_validation_errors(tmp_path) -> None:

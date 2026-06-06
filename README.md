@@ -91,7 +91,7 @@ python -m app.export_powermodels data/processed/hong_kong_16h_model.json --inclu
 Write both Phase 1 Hong Kong snapshots plus a manifest:
 
 ```powershell
-python -m app.export_powermodels data/processed --hong-kong-phase1-bundle --include-hk-interties
+python -m app.export_powermodels data/processed --hong-kong-phase1-bundle --include-hk-interties --n-per-mode 3
 ```
 
 The bundle also writes `run_hong_kong_solver_pipeline.ps1` and `grids_solvable.txt` for the downstream Julia solve/export/scenario steps. Pass the cloned solver path when running it if needed:
