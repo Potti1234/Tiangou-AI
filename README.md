@@ -135,7 +135,8 @@ python -m app.verify_gridsfm_handoff data/processed/hong_kong_phase1_manifest.js
 Current Hong Kong Phase 1 smoke status, using `--include-hk-interties --min-voltage-kv 100 --n-per-mode 1`:
 
 - Tiangou validation is `ok` for both `hong_kong_16h_model.json` and `hong_kong_04h_model.json`.
-- The exported solver case has 42 buses, 53 branches, 16 loads, 3 generators/imports, one connected island, and zero severe branch-voltage mismatches.
+- The exported solver case has 37 buses, 50 inter-facility branches, 16 loads, 3 generators/imports, one connected island, and zero severe branch-voltage mismatches.
+- Reconstruction includes 2 merged OSM circuits, 1 inferred multi-voltage facility transformer, and 8 transparent service-territory backbone branches in the retained solver case.
 - GridSFM `solve_topo_json.jl` solves both snapshots at `L0` strict.
 - `export_gridsfm_data.jl` writes both `.pyg.json` files.
 - `solve_pyg_json.jl` reports `RESOLVE ok` for both base PyG exports.
