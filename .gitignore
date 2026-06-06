@@ -5,3 +5,5 @@ __pycache__/
 data/
 *.sqlite3
 *.egg-info/
+frontend/dist/
+frontend/node_modules/

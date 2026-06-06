@@ -22,6 +22,20 @@ The SQLite database defaults to `data/tiangou.sqlite3`. Override it with:
 $env:TIANGOU_DATABASE_PATH="data/custom.sqlite3"
 ```
 
+## Docker Test Deployment
+
+Build and run the backend plus frontend proxy locally:
+
+```powershell
+docker compose up --build
+```
+
+Open `http://localhost:8080`. The frontend is served by nginx and proxies `/api/*` to the FastAPI service, so a single Cloudflare Tunnel/Dokploy public route can point at the `frontend` service on port `80`.
+
+The containerized SQLite database is stored in the named Docker volume `tiangou-data`. The backend uses `/data/tiangou.sqlite3` through `TIANGOU_DATABASE_PATH`.
+
+For Dokploy, deploy this repository with Docker Compose and expose only the `frontend` service. The `api` service stays internal on the Compose network.
+
 ## Ingest OpenStreetMap Power Data
 
 ```powershell
