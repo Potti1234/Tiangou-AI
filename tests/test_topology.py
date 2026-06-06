@@ -51,9 +51,10 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert set(case) >= {"bus", "branch", "gen", "load", "shunt"}
     assert case["_metadata"]["total_pd_mw"] == 9591.0
     assert case["_metadata"]["gen_count"] == 2
+    assert case["_metadata"]["reference_bus_count"] == 2
 
     assert sorted(case["bus"]) == ["1", "2", "3", "4"]
-    assert any(bus["bus_type"] == 3 for bus in case["bus"].values())
+    assert sum(1 for bus in case["bus"].values() if bus["bus_type"] == 3) == 2
     assert all(bus["type"] == bus["bus_type"] for bus in case["bus"].values())
     assert all(branch["br_r"] > 0 for branch in case["branch"].values())
     assert all(branch["br_x"] > 0 for branch in case["branch"].values())
@@ -132,6 +133,7 @@ def test_powermodels_preview_can_include_hk_intertie() -> None:
     exported_intertie = next(branch for branch in case["branch"].values() if branch["source_id"] == intertie["id"])
     assert topology["metadata"]["include_hk_interties"] is True
     assert case["_metadata"]["include_hk_interties"] is True
+    assert case["_metadata"]["reference_bus_count"] == 1
     assert topology["metadata"]["branch_count"] == 3
     assert intertie["provenance"] == "public_interconnection_capacity_equivalent"
     assert exported_intertie["rate_a"] == 720.0
@@ -157,6 +159,7 @@ def test_powermodels_validation_reports_islands_and_capacity() -> None:
     assert validation["metrics"]["island_count"] == 2
     assert validation["metrics"]["total_pd_mw"] == 9591.0
     assert validation["errors"] == []
+    assert all(island["reference_bus_count"] == 1 for island in validation["islands"])
 
 
 def test_powermodels_validation_rejects_load_island_without_generation() -> None:
@@ -185,6 +188,19 @@ def test_powermodels_validation_requires_native_bus_type() -> None:
         "bus_id": "1",
         "field": "bus_type",
     } in validation["errors"]
+
+
+def test_powermodels_validation_requires_reference_per_generator_island() -> None:
+    case = build_powermodels_preview(_sample_rows(), snap_tolerance_km=0.2)
+    for bus in case["bus"].values():
+        if bus["bus_type"] == 3:
+            bus["bus_type"] = 2
+            bus["type"] = 2
+
+    validation = validate_powermodels_case(case)
+
+    assert validation["status"] == "error"
+    assert "island_missing_reference_bus" in {error["code"] for error in validation["errors"]}
 
 
 def test_powermodels_validation_requires_quadratic_generator_cost() -> None:

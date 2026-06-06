@@ -423,12 +423,12 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
     bus_id_map = {bus["id"]: str(index) for index, bus in enumerate(buses, start=1)}
     gen_bus_ids = {generator["bus_id"] for generator in all_generators}
     load_bus_ids = {load["bus_id"] for load in loads}
-    reference_bus_id = _reference_bus_id(buses, gen_bus_ids)
+    reference_bus_ids = _reference_bus_ids_by_island(buses, branches, gen_bus_ids)
 
     bus_dict = {}
     for bus in buses:
         bus_number = bus_id_map[bus["id"]]
-        bus_type = _powermodels_bus_type(bus["id"], reference_bus_id, gen_bus_ids, load_bus_ids)
+        bus_type = _powermodels_bus_type(bus["id"], reference_bus_ids, gen_bus_ids, load_bus_ids)
         bus_dict[bus_number] = {
             "bus_i": int(bus_number),
             "bus_type": bus_type,
@@ -505,6 +505,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "gen_count": len(gen_dict),
             "tagged_gen_count": len(tagged_generators),
             "equivalent_gen_count": len(equivalent_generators),
+            "reference_bus_count": len(reference_bus_ids),
             "total_pd_mw": round(sum(load["pd_mw"] for load in loads), 3),
             "total_tagged_pmax_mw": round(sum(gen["pmax_mw"] for gen in tagged_generators), 3),
             "total_equivalent_pmax_mw": round(sum(gen["pmax_mw"] for gen in equivalent_generators), 3),
@@ -601,6 +602,24 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
 
     island_report = _case_island_report(buses, branches, loads, generators)
     for island in island_report["islands"]:
+        if island["gen_count"] > 0 and island["reference_bus_count"] == 0:
+            errors.append(
+                {
+                    "code": "island_missing_reference_bus",
+                    "message": "A connected component with generation has no slack/reference bus.",
+                    "bus_ids": island["bus_ids"],
+                    "gen_count": island["gen_count"],
+                }
+            )
+        if island["reference_bus_count"] > 1:
+            errors.append(
+                {
+                    "code": "island_multiple_reference_buses",
+                    "message": "A connected component has more than one slack/reference bus.",
+                    "bus_ids": island["bus_ids"],
+                    "reference_bus_count": island["reference_bus_count"],
+                }
+            )
         if island["load_count"] > 0 and island["gen_count"] == 0:
             errors.append(
                 {
@@ -659,6 +678,12 @@ def _case_island_report(
     for generator in generators.values():
         gen_buses[generator["gen_bus"]] = gen_buses.get(generator["gen_bus"], 0) + 1
 
+    reference_buses = {
+        int(bus["bus_i"])
+        for bus in buses.values()
+        if int(bus.get("bus_type", bus.get("type", 1))) == 3
+    }
+
     seen: set[int] = set()
     islands = []
     for bus_id in sorted(adjacency):
@@ -679,6 +704,7 @@ def _case_island_report(
                 "bus_count": len(component),
                 "load_count": sum(load_buses.get(bus, 0) for bus in component),
                 "gen_count": sum(gen_buses.get(bus, 0) for bus in component),
+                "reference_bus_count": sum(1 for bus in component if bus in reference_buses),
             }
         )
 
@@ -687,11 +713,11 @@ def _case_island_report(
 
 def _powermodels_bus_type(
     bus_id: str,
-    reference_bus_id: str | None,
+    reference_bus_ids: set[str],
     gen_bus_ids: set[str],
     load_bus_ids: set[str],
 ) -> int:
-    if bus_id == reference_bus_id:
+    if bus_id in reference_bus_ids:
         return 3
     if bus_id in gen_bus_ids:
         return 2
@@ -700,13 +726,41 @@ def _powermodels_bus_type(
     return 1
 
 
-def _reference_bus_id(buses: list[dict[str, Any]], gen_bus_ids: set[str]) -> str | None:
-    candidates = [bus for bus in buses if bus["id"] in gen_bus_ids]
-    if not candidates:
-        candidates = buses
-    if not candidates:
-        return None
-    return max(candidates, key=lambda bus: bus.get("base_kv") or 0.0)["id"]
+def _reference_bus_ids_by_island(
+    buses: list[dict[str, Any]],
+    branches: list[Mapping[str, Any]],
+    gen_bus_ids: set[str],
+) -> set[str]:
+    bus_by_id = {bus["id"]: bus for bus in buses}
+    adjacency: dict[str, set[str]] = {bus["id"]: set() for bus in buses}
+    for branch in branches:
+        from_bus_id = branch.get("from_bus_id")
+        to_bus_id = branch.get("to_bus_id")
+        if from_bus_id in adjacency and to_bus_id in adjacency:
+            adjacency[str(from_bus_id)].add(str(to_bus_id))
+            adjacency[str(to_bus_id)].add(str(from_bus_id))
+
+    reference_bus_ids: set[str] = set()
+    seen: set[str] = set()
+    for bus_id in sorted(adjacency):
+        if bus_id in seen:
+            continue
+        stack = [bus_id]
+        component: set[str] = set()
+        while stack:
+            current = stack.pop()
+            if current in component:
+                continue
+            component.add(current)
+            stack.extend(adjacency[current] - component)
+        seen.update(component)
+
+        candidates = [bus_by_id[candidate] for candidate in component if candidate in gen_bus_ids]
+        if not candidates:
+            candidates = [bus_by_id[candidate] for candidate in component]
+        if candidates:
+            reference_bus_ids.add(max(candidates, key=lambda bus: bus.get("base_kv") or 0.0)["id"])
+    return reference_bus_ids
 
 
 def _powermodels_branch(
