@@ -21,6 +21,8 @@ env/
 *_executed.ipynb
 frontend/dist/
 frontend/node_modules/
+hk_grid_frontend/dist/
+hk_grid_frontend/node_modules/
 hk_grid_backend/.venv/
 .ipynb_checkpoints/
 # Jupyter
