@@ -1,5 +1,6 @@
 import json
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -28,6 +29,12 @@ from app.topology import (
 
 
 DEMAND_SNAPSHOT_PATTERN = f"^({'|'.join(sorted(DEMAND_SNAPSHOTS))})$"
+HANDOFF_ARTIFACT_PATHS = {
+    "raw_json": "data/processed/hong_kong_16h_model.json",
+    "solvable_json": "data/processed/hong_kong_16h_model.solvable.json",
+    "pyg_json": "data/processed/hong_kong_16h_model.pyg.json",
+    "scenarios": "data/processed/scenarios",
+}
 
 
 @asynccontextmanager
@@ -71,6 +78,17 @@ def _element_detail(row: Any) -> dict[str, Any]:
     geometry_json = data.pop("geometry_json")
     data["geometry"] = json.loads(geometry_json) if geometry_json else None
     return data
+
+
+def _handoff_artifact_summary() -> dict[str, Any]:
+    exists = {name: Path(path).exists() for name, path in HANDOFF_ARTIFACT_PATHS.items()}
+    present_count = sum(1 for value in exists.values() if value)
+    status = "complete" if present_count == len(exists) else "warning" if present_count else "not_run"
+    return {
+        "status": status,
+        "paths": HANDOFF_ARTIFACT_PATHS,
+        "exists": exists,
+    }
 
 
 @app.get("/health")
@@ -310,12 +328,13 @@ def topology_pipeline_summary(
         power = row["power"]
         raw_counts[power] = raw_counts.get(power, 0) + 1
 
+    handoff_artifacts = _handoff_artifact_summary()
     stage_status = {
         "raw_osm": "complete" if rows else "not_run",
         "reconstructed_circuits": "complete" if topology["metadata"]["branch_count"] else "warning",
         "solver_topology": "complete" if case["_metadata"]["bus_count"] else "not_run",
         "validation": validation["status"],
-        "handoff_artifacts": "not_run",
+        "handoff_artifacts": handoff_artifacts["status"],
     }
     if not rows:
         stage_status["reconstructed_circuits"] = "not_run"
@@ -341,10 +360,6 @@ def topology_pipeline_summary(
             "warnings": validation["warnings"],
             "metrics": validation["metrics"],
         },
-        "handoff_artifacts": {
-            "raw_json": "data/processed/hong_kong_16h_model.json",
-            "solvable_json": "data/processed/hong_kong_16h_model.solvable.json",
-            "pyg_json": "data/processed/hong_kong_16h_model.pyg.json",
-            "scenarios": "data/processed/scenarios",
-        },
+        "handoff_artifacts": handoff_artifacts["paths"],
+        "handoff_artifact_exists": handoff_artifacts["exists"],
     }

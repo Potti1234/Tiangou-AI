@@ -147,8 +147,10 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert summary_payload["stage_status"]["raw_osm"] == "complete"
     assert summary_payload["stage_status"]["solver_topology"] == "complete"
     assert summary_payload["stage_status"]["validation"] in {"ok", "warning", "error"}
+    assert summary_payload["stage_status"]["handoff_artifacts"] in {"not_run", "warning", "complete"}
     assert summary_payload["raw_osm_counts_by_power"] == {"line": 1, "substation": 2}
     assert summary_payload["topology_metadata"]["min_voltage_kv"] == 100.0
     assert summary_payload["solver_metadata"]["branch_count"] == 1
     assert summary_payload["validation"]["metrics"]["island_count"] == 1
     assert summary_payload["handoff_artifacts"]["pyg_json"].endswith(".pyg.json")
+    assert set(summary_payload["handoff_artifact_exists"]) == {"raw_json", "solvable_json", "pyg_json", "scenarios"}
