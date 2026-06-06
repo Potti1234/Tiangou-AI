@@ -178,6 +178,8 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert "Get-Command julia" in handoff_script
     assert "julia --version" in handoff_script
     assert "Julia is on PATH but is not runnable" in handoff_script
+    assert '[string]$SolverPipeline = "third_party\\gridsfm_solver"' in handoff_script
+    assert "..\\GridSFM\\power_grid\\US\\topology_solver_pipeline" not in handoff_script
     assert "Test-Path $ScriptPath" in handoff_script
     assert "solve_topo_json.jl" in handoff_script
     assert "export_gridsfm_data.jl" in handoff_script
@@ -191,7 +193,10 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
         f"{output_dir / 'hong_kong_04h_model.solvable.json'} 3",
     ]
     assert manifest["solver_handoff"]["script_path"] == str(handoff_path)
-    assert manifest["solver_handoff"]["default_solver_pipeline"] == "..\\GridSFM\\power_grid\\US\\topology_solver_pipeline"
+    assert manifest["solver_handoff"]["embedded_solver_pipeline"] is True
+    assert manifest["solver_handoff"]["solver_pipeline_path"] == "third_party\\gridsfm_solver"
+    assert manifest["solver_handoff"]["default_solver_pipeline"] == "third_party\\gridsfm_solver"
+    assert manifest["solver_handoff"]["julia_project_path"] == "third_party\\gridsfm_solver"
     assert manifest["solver_handoff"]["required_solver_scripts"] == [
         "solve_topo_json.jl",
         "export_gridsfm_data.jl",

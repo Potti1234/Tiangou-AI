@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from app.database import connect
+from app.gridsfm_solver_config import DEFAULT_GRIDSFM_SOLVER_DIR, REQUIRED_SOLVER_SCRIPTS
 from app.repository import list_elements
 from app.topology import DEMAND_SNAPSHOTS, build_powermodels_preview, validate_powermodels_case
 
@@ -146,12 +147,9 @@ def _write_solver_handoff(
     *,
     n_per_mode: int,
 ) -> dict[str, Any]:
-    required_solver_scripts = [
-        "solve_topo_json.jl",
-        "export_gridsfm_data.jl",
-        "solve_pyg_json.jl",
-        "gen_perturbed_data.jl",
-    ]
+    required_solver_scripts = list(REQUIRED_SOLVER_SCRIPTS)
+    solver_pipeline_path = str(DEFAULT_GRIDSFM_SOLVER_DIR)
+    solver_pipeline_ps_path = solver_pipeline_path.replace("/", "\\")
     solvable_paths = [
         str(Path(export["output_path"]).with_suffix("").with_suffix(".solvable.json"))
         for export in exports
@@ -170,7 +168,7 @@ def _write_solver_handoff(
     script_path = output_dir / "run_hong_kong_solver_pipeline.ps1"
     lines = [
         "param(",
-        '    [string]$SolverPipeline = "..\\GridSFM\\power_grid\\US\\topology_solver_pipeline"',
+        f'    [string]$SolverPipeline = "{solver_pipeline_ps_path}"',
         ")",
         "$ErrorActionPreference = 'Stop'",
         "",
@@ -215,8 +213,11 @@ def _write_solver_handoff(
 
     return {
         "script_path": str(script_path),
-        "default_solver_pipeline": "..\\GridSFM\\power_grid\\US\\topology_solver_pipeline",
+        "embedded_solver_pipeline": True,
+        "solver_pipeline_path": solver_pipeline_path,
+        "default_solver_pipeline": solver_pipeline_path,
         "required_solver_scripts": required_solver_scripts,
+        "julia_project_path": solver_pipeline_path,
         "grids_solvable_path": str(grids_solvable_path),
         "solvable_paths": solvable_paths,
         "pyg_paths": pyg_paths,
