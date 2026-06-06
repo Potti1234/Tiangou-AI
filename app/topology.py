@@ -325,6 +325,15 @@ def build_powermodels_preview(
     return topology_preview_to_powermodels(topology)
 
 
+def build_powermodels_validation(
+    rows: Iterable[Any],
+    *,
+    snap_tolerance_km: float = 0.75,
+) -> dict[str, Any]:
+    case = build_powermodels_preview(rows, snap_tolerance_km=snap_tolerance_km)
+    return validate_powermodels_case(case)
+
+
 def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, Any]:
     buses = list(topology["buses"])
     branches = [
@@ -416,6 +425,140 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             ],
         },
     }
+
+
+def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    buses = case.get("bus") or {}
+    branches = case.get("branch") or {}
+    generators = case.get("gen") or {}
+    loads = case.get("load") or {}
+
+    if not buses:
+        errors.append({"code": "no_buses", "message": "Case has no buses."})
+    if not generators:
+        errors.append({"code": "no_generators", "message": "Case has no active generators or equivalent imports."})
+    if not branches:
+        warnings.append({"code": "no_branches", "message": "Case has no branches; solver handoff will be a single-bus equivalent at best."})
+
+    bus_ids = {int(bus["bus_i"]) for bus in buses.values()}
+    for branch_id, branch in branches.items():
+        if branch["f_bus"] not in bus_ids or branch["t_bus"] not in bus_ids:
+            errors.append({"code": "branch_missing_bus", "message": "Branch references an unknown bus.", "branch_id": branch_id})
+        if branch["br_r"] <= 0 or branch["br_x"] <= 0:
+            errors.append({"code": "branch_nonpositive_impedance", "message": "Branch has nonpositive impedance.", "branch_id": branch_id})
+        if branch["rate_a"] <= 0:
+            errors.append({"code": "branch_nonpositive_rating", "message": "Branch has nonpositive thermal rating.", "branch_id": branch_id})
+
+    for load_id, load in loads.items():
+        if load["load_bus"] not in bus_ids:
+            errors.append({"code": "load_missing_bus", "message": "Load references an unknown bus.", "load_id": load_id})
+        if load["pd"] < 0 or load["qd"] < 0:
+            errors.append({"code": "load_negative_demand", "message": "Load has negative demand.", "load_id": load_id})
+
+    for gen_id, generator in generators.items():
+        if generator["gen_bus"] not in bus_ids:
+            errors.append({"code": "gen_missing_bus", "message": "Generator references an unknown bus.", "gen_id": gen_id})
+        if generator["pmax"] <= 0 or generator["pmax"] < generator["pmin"]:
+            errors.append({"code": "gen_invalid_capacity", "message": "Generator has invalid active-power limits.", "gen_id": gen_id})
+
+    total_pd = sum(load["pd"] for load in loads.values())
+    total_pmax = sum(generator["pmax"] for generator in generators.values())
+    if total_pd > 0 and total_pmax < total_pd * 1.05:
+        errors.append(
+            {
+                "code": "generation_capacity_shortfall",
+                "message": "Generator capacity is below demand plus a 5 percent reserve margin.",
+                "total_pd_pu": round(total_pd, 6),
+                "total_pmax_pu": round(total_pmax, 6),
+            }
+        )
+
+    island_report = _case_island_report(buses, branches, loads, generators)
+    for island in island_report["islands"]:
+        if island["load_count"] > 0 and island["gen_count"] == 0:
+            errors.append(
+                {
+                    "code": "load_island_without_generation",
+                    "message": "A connected component has load but no generator or equivalent import.",
+                    "bus_ids": island["bus_ids"],
+                    "load_count": island["load_count"],
+                }
+            )
+        elif island["load_count"] == 0 and island["gen_count"] == 0:
+            warnings.append(
+                {
+                    "code": "passive_island",
+                    "message": "A connected component has neither load nor generation.",
+                    "bus_ids": island["bus_ids"],
+                }
+            )
+
+    status = "error" if errors else "warning" if warnings else "ok"
+    return {
+        "status": status,
+        "errors": errors,
+        "warnings": warnings,
+        "metrics": {
+            "bus_count": len(buses),
+            "branch_count": len(branches),
+            "load_count": len(loads),
+            "gen_count": len(generators),
+            "total_pd_mw": round(total_pd * BASE_MVA, 3),
+            "total_pmax_mw": round(total_pmax * BASE_MVA, 3),
+            "island_count": island_report["island_count"],
+        },
+        "islands": island_report["islands"],
+    }
+
+
+def _case_island_report(
+    buses: Mapping[str, Any],
+    branches: Mapping[str, Any],
+    loads: Mapping[str, Any],
+    generators: Mapping[str, Any],
+) -> dict[str, Any]:
+    adjacency: dict[int, set[int]] = {int(bus["bus_i"]): set() for bus in buses.values()}
+    for branch in branches.values():
+        f_bus = int(branch["f_bus"])
+        t_bus = int(branch["t_bus"])
+        if f_bus in adjacency and t_bus in adjacency:
+            adjacency[f_bus].add(t_bus)
+            adjacency[t_bus].add(f_bus)
+
+    load_buses: dict[int, int] = {}
+    for load in loads.values():
+        load_buses[load["load_bus"]] = load_buses.get(load["load_bus"], 0) + 1
+
+    gen_buses: dict[int, int] = {}
+    for generator in generators.values():
+        gen_buses[generator["gen_bus"]] = gen_buses.get(generator["gen_bus"], 0) + 1
+
+    seen: set[int] = set()
+    islands = []
+    for bus_id in sorted(adjacency):
+        if bus_id in seen:
+            continue
+        stack = [bus_id]
+        component: set[int] = set()
+        while stack:
+            current = stack.pop()
+            if current in component:
+                continue
+            component.add(current)
+            stack.extend(adjacency[current] - component)
+        seen.update(component)
+        islands.append(
+            {
+                "bus_ids": sorted(component),
+                "bus_count": len(component),
+                "load_count": sum(load_buses.get(bus, 0) for bus in component),
+                "gen_count": sum(gen_buses.get(bus, 0) for bus in component),
+            }
+        )
+
+    return {"island_count": len(islands), "islands": islands}
 
 
 def _powermodels_bus_type(

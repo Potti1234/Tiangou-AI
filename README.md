@@ -50,4 +50,10 @@ Generate a first PowerModels-style solver handoff JSON:
 Invoke-RestMethod http://127.0.0.1:8000/grid/topology/powermodels-preview
 ```
 
+Run structural validation before solver handoff:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/grid/topology/validation
+```
+
 This preview uses OSM geometry, voltage-class impedance defaults, public Hong Kong peak-demand anchors, and territory-level equivalent generators. Treat it as an upstream topology-builder artifact for the Julia relaxation/export pipeline, not as an operational grid model.

@@ -1,4 +1,9 @@
-from app.topology import build_powermodels_preview, build_topology_preview, normalize_voltage
+from app.topology import (
+    build_powermodels_preview,
+    build_topology_preview,
+    normalize_voltage,
+    validate_powermodels_case,
+)
 
 
 def test_normalize_voltage_accepts_common_osm_formats() -> None:
@@ -45,6 +50,30 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert all(branch["br_x"] > 0 for branch in case["branch"].values())
     assert sum(load["pd"] for load in case["load"].values()) == 95.91
     assert sum(gen["pmax"] for gen in case["gen"].values()) > 95.91
+
+
+def test_powermodels_validation_reports_islands_and_capacity() -> None:
+    case = build_powermodels_preview(_sample_rows(), snap_tolerance_km=0.2)
+
+    validation = validate_powermodels_case(case)
+
+    assert validation["status"] == "ok"
+    assert validation["metrics"]["island_count"] == 2
+    assert validation["metrics"]["total_pd_mw"] == 9591.0
+    assert validation["errors"] == []
+
+
+def test_powermodels_validation_rejects_load_island_without_generation() -> None:
+    case = build_powermodels_preview(_sample_rows(), snap_tolerance_km=0.2)
+    case["gen"] = {}
+
+    validation = validate_powermodels_case(case)
+
+    assert validation["status"] == "error"
+    error_codes = {error["code"] for error in validation["errors"]}
+    assert "no_generators" in error_codes
+    assert "generation_capacity_shortfall" in error_codes
+    assert "load_island_without_generation" in error_codes
 
 
 def _sample_rows() -> list[dict[str, object]]:

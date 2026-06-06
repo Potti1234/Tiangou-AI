@@ -99,11 +99,14 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     with TestClient(main.app) as client:
         ingest_response = client.post("/ingest/hong-kong")
         preview_response = client.get("/grid/topology/powermodels-preview")
+        validation_response = client.get("/grid/topology/validation")
 
     assert ingest_response.status_code == 200
     assert preview_response.status_code == 200
+    assert validation_response.status_code == 200
     payload = preview_response.json()
     assert payload["baseMVA"] == 100.0
     assert payload["_metadata"]["branch_count"] == 1
     assert payload["_metadata"]["load_count"] == 2
     assert payload["_metadata"]["gen_count"] == 1
+    assert validation_response.json()["status"] == "ok"
