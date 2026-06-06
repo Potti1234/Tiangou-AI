@@ -115,6 +115,30 @@ def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
     assert any(generator["source_id"] == "gen:node:50" for generator in case["gen"].values())
 
 
+def test_powermodels_preview_can_include_hk_intertie() -> None:
+    topology = build_topology_preview(
+        _sample_rows(),
+        snap_tolerance_km=0.2,
+        include_hk_interties=True,
+    )
+    case = build_powermodels_preview(
+        _sample_rows(),
+        snap_tolerance_km=0.2,
+        include_hk_interties=True,
+    )
+    validation = validate_powermodels_case(case)
+
+    intertie = next(branch for branch in topology["branches"] if branch["id"] == "synthetic:intertie:clp-hk-electric")
+    exported_intertie = next(branch for branch in case["branch"].values() if branch["source_id"] == intertie["id"])
+    assert topology["metadata"]["include_hk_interties"] is True
+    assert case["_metadata"]["include_hk_interties"] is True
+    assert topology["metadata"]["branch_count"] == 3
+    assert intertie["provenance"] == "public_interconnection_capacity_equivalent"
+    assert exported_intertie["rate_a"] == 720.0
+    assert validation["status"] == "ok"
+    assert validation["metrics"]["island_count"] == 1
+
+
 def test_topology_preview_rejects_unknown_demand_snapshot() -> None:
     try:
         build_topology_preview(_sample_rows(), demand_snapshot="lunch")

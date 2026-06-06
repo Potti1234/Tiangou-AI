@@ -26,6 +26,7 @@ HK_PEAK_DEMAND_MW = {
     "clp": 7336.0,
     "hk-electric": 2255.0,
 }
+HK_INTERTIE_RATE_MVA = 720.0
 DEMAND_SNAPSHOTS = {
     "peak_16h": {
         "label": "Hong Kong 2024 peak demand, 16h representative snapshot",
@@ -238,6 +239,7 @@ def build_topology_preview(
     *,
     snap_tolerance_km: float = 0.75,
     demand_snapshot: str = "peak_16h",
+    include_hk_interties: bool = False,
 ) -> dict[str, Any]:
     snapshot = _demand_snapshot(demand_snapshot)
     records = [_row_to_record(row) for row in rows]
@@ -350,6 +352,8 @@ def build_topology_preview(
         )
 
     buses.extend(synthetic_buses.values())
+    if include_hk_interties:
+        branches.extend(_hk_intertie_branches(buses))
     load_allocations = _allocate_loads(buses, demand_snapshot=demand_snapshot)
     return {
         "metadata": {
@@ -358,6 +362,7 @@ def build_topology_preview(
             "demand_snapshot": demand_snapshot,
             "demand_snapshot_label": snapshot["label"],
             "load_factor": snapshot["load_factor"],
+            "include_hk_interties": include_hk_interties,
             "bus_count": len(buses),
             "branch_count": len(branches),
             "generator_count": len(generators),
@@ -376,11 +381,13 @@ def build_powermodels_preview(
     *,
     snap_tolerance_km: float = 0.75,
     demand_snapshot: str = "peak_16h",
+    include_hk_interties: bool = False,
 ) -> dict[str, Any]:
     topology = build_topology_preview(
         rows,
         snap_tolerance_km=snap_tolerance_km,
         demand_snapshot=demand_snapshot,
+        include_hk_interties=include_hk_interties,
     )
     return topology_preview_to_powermodels(topology)
 
@@ -390,11 +397,13 @@ def build_powermodels_validation(
     *,
     snap_tolerance_km: float = 0.75,
     demand_snapshot: str = "peak_16h",
+    include_hk_interties: bool = False,
 ) -> dict[str, Any]:
     case = build_powermodels_preview(
         rows,
         snap_tolerance_km=snap_tolerance_km,
         demand_snapshot=demand_snapshot,
+        include_hk_interties=include_hk_interties,
     )
     return validate_powermodels_case(case)
 
@@ -473,6 +482,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
         "name": "hong_kong_osm_preview",
         "source_version": "tiangou.powermodels_preview.v1",
         "demand_snapshot": topology["metadata"]["demand_snapshot"],
+        "include_hk_interties": topology["metadata"]["include_hk_interties"],
         "baseMVA": BASE_MVA,
         "per_unit": True,
         "bus": bus_dict,
@@ -488,6 +498,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "demand_snapshot": topology["metadata"]["demand_snapshot"],
             "demand_snapshot_label": topology["metadata"]["demand_snapshot_label"],
             "load_factor": topology["metadata"]["load_factor"],
+            "include_hk_interties": topology["metadata"]["include_hk_interties"],
             "bus_count": len(bus_dict),
             "branch_count": len(branch_dict),
             "load_count": len(load_dict),
@@ -729,6 +740,75 @@ def _powermodels_branch(
         "transformer": False,
         "source_id": branch["id"],
     }
+
+
+def _hk_intertie_branches(buses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    clp_bus = _best_intertie_bus(buses, "clp")
+    hke_bus = _best_intertie_bus(buses, "hk-electric")
+    if clp_bus is None or hke_bus is None:
+        return []
+
+    voltage_kv = min(
+        clp_bus.get("base_kv") or 132.0,
+        hke_bus.get("base_kv") or 132.0,
+    )
+    length_km = None
+    if clp_bus.get("lat") is not None and clp_bus.get("lon") is not None and hke_bus.get("lat") is not None and hke_bus.get("lon") is not None:
+        length_km = _haversine_km(
+            (clp_bus["lat"], clp_bus["lon"]),
+            (hke_bus["lat"], hke_bus["lon"]),
+        )
+
+    return [
+        {
+            "id": "synthetic:intertie:clp-hk-electric",
+            "source": {"kind": "public_hk_cross_harbour_interconnection"},
+            "name": "CLP-HK Electric emergency interconnection",
+            "power": "intertie",
+            "from_bus_id": clp_bus["id"],
+            "to_bus_id": hke_bus["id"],
+            "voltage_kv": voltage_kv,
+            "voltage_band": voltage_band(voltage_kv),
+            "length_km": length_km,
+            "location": "submarine_or_underground_equivalent",
+            "circuits": None,
+            "cables": None,
+            "parameter_defaults": {
+                "r_ohm_per_km": 0.055,
+                "x_ohm_per_km": 0.16,
+                "rate_mva": HK_INTERTIE_RATE_MVA,
+                "matched_voltage_kv": 132.0,
+            },
+            "endpoint_quality": [
+                {"snap": "synthetic_public_intertie", "bus_id": clp_bus["id"]},
+                {"snap": "synthetic_public_intertie", "bus_id": hke_bus["id"]},
+            ],
+            "provenance": "public_interconnection_capacity_equivalent",
+            "confidence": 0.5,
+        }
+    ]
+
+
+def _best_intertie_bus(
+    buses: list[dict[str, Any]],
+    territory: str,
+) -> dict[str, Any] | None:
+    candidates = [
+        bus
+        for bus in buses
+        if bus.get("service_territory") == territory
+        and bus.get("voltage_band") in {"extra_high_voltage", "high_voltage"}
+    ]
+    if not candidates:
+        candidates = [
+            bus
+            for bus in buses
+            if bus.get("service_territory") == territory
+            and bus.get("voltage_band") == "subtransmission"
+        ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda bus: bus.get("base_kv") or 0.0)
 
 
 def _tagged_generators(generators: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:

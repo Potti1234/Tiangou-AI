@@ -15,6 +15,7 @@ def export_powermodels_case(
     region_key: str = "hong-kong",
     snap_tolerance_km: float = 0.75,
     demand_snapshot: str = "peak_16h",
+    include_hk_interties: bool = False,
     allow_validation_errors: bool = False,
 ) -> dict[str, Any]:
     with connect(database_path) as conn:
@@ -24,6 +25,7 @@ def export_powermodels_case(
         rows,
         snap_tolerance_km=snap_tolerance_km,
         demand_snapshot=demand_snapshot,
+        include_hk_interties=include_hk_interties,
     )
     validation = validate_powermodels_case(case)
     if validation["status"] == "error" and not allow_validation_errors:
@@ -36,6 +38,7 @@ def export_powermodels_case(
         "output_path": str(output_path),
         "region_key": region_key,
         "demand_snapshot": demand_snapshot,
+        "include_hk_interties": include_hk_interties,
         "validation": validation,
         "metadata": case["_metadata"],
     }
@@ -49,6 +52,11 @@ def main() -> None:
     parser.add_argument("--snap-tolerance-km", type=float, default=0.75)
     parser.add_argument("--demand-snapshot", choices=sorted(DEMAND_SNAPSHOTS), default="peak_16h")
     parser.add_argument(
+        "--include-hk-interties",
+        action="store_true",
+        help="Add the public 720 MVA CLP-HK Electric interconnection as a synthetic branch.",
+    )
+    parser.add_argument(
         "--allow-validation-errors",
         action="store_true",
         help="Write the JSON even when structural validation reports errors.",
@@ -61,6 +69,7 @@ def main() -> None:
         region_key=args.region_key,
         snap_tolerance_km=args.snap_tolerance_km,
         demand_snapshot=args.demand_snapshot,
+        include_hk_interties=args.include_hk_interties,
         allow_validation_errors=args.allow_validation_errors,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
