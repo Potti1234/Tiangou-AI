@@ -73,6 +73,8 @@ type TopologyBranch = {
   length_km: number | null
   provenance: string | null
   confidence: number | null
+  circuit_class?: string | null
+  circuit_count?: number | null
   parameter_defaults?: { matched_voltage_kv?: number; rate_mva?: number }
 }
 
@@ -99,6 +101,8 @@ type PowerModelsBranch = {
   transformer: boolean
   rate_a: number
   matched_voltage_kv?: number
+  circuit_class?: string | null
+  circuit_count?: number | null
   provenance: string | null
   confidence: number | null
 }
@@ -136,7 +140,7 @@ type ValidationPayload = {
 type PipelineSummary = {
   stage_status: Record<string, StageStatus>
   raw_osm_counts_by_power: Record<string, number>
-  topology_metadata: Record<string, number | string | boolean | null>
+  topology_metadata: Record<string, unknown>
   quality: Record<string, unknown>
   solver_metadata: Record<string, unknown>
   validation: ValidationPayload
@@ -248,6 +252,31 @@ function isLinearAsset(asset: GridAsset) {
   )
 }
 
+function reconstructedRouteStyle(branch: TopologyBranch): Pick<RouteLayer, "color" | "width" | "opacity" | "dashArray"> {
+  const synthetic = branch.provenance?.includes("public") || branch.id.startsWith("synthetic:")
+  const inferredTransformer = branch.provenance === "inferred_multi_voltage_facility_transformer"
+  if (inferredTransformer) {
+    return { color: "#2563eb", width: 3, opacity: 0.82, dashArray: [4, 2] }
+  }
+  if (synthetic) {
+    return { color: "#2563eb", width: 3, opacity: 0.76, dashArray: [3, 2] }
+  }
+  if (branch.circuit_class && branch.circuit_class !== "inter_facility") {
+    return {
+      color: branch.circuit_class === "tap" ? "#a16207" : "#71717a",
+      width: 2,
+      opacity: 0.38,
+      dashArray: [2, 3],
+    }
+  }
+  return {
+    color: branch.power === "cable" ? "#6d6875" : "#b45309",
+    width: 4,
+    opacity: 0.9,
+    dashArray: undefined,
+  }
+}
+
 function routeCoordinates(asset: GridAsset): [number, number][] {
   return (asset.geometry ?? []).map((point) => [point.lon, point.lat])
 }
@@ -262,6 +291,12 @@ function metric(summary: PipelineSummary | null, key: string) {
   return typeof value === "number" ? value : undefined
 }
 
+function metadataRecord(source: Record<string, unknown> | undefined, key: string) {
+  const value = source?.[key]
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  return value as Record<string, number>
+}
+
 function MetadataRow({ label, value }: { label: string; value: unknown }) {
   return (
     <div className="flex items-baseline justify-between gap-4 border-b border-zinc-200/70 py-1.5 text-xs">
@@ -269,6 +304,20 @@ function MetadataRow({ label, value }: { label: string; value: unknown }) {
       <span className="max-w-[190px] truncate font-medium tabular-nums text-zinc-900">
         {typeof value === "number" ? formatNumber(value, 3) : String(value ?? "n/a")}
       </span>
+    </div>
+  )
+}
+
+function CountBadges({ counts }: { counts: Record<string, number> }) {
+  const entries = Object.entries(counts)
+  if (!entries.length) return <p className="text-xs text-zinc-500">No counts reported.</p>
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {entries.map(([label, count]) => (
+        <Badge key={label} variant="outline" className="rounded-[3px] border-zinc-300 bg-white/75">
+          {label} {formatNumber(count)}
+        </Badge>
+      ))}
     </div>
   )
 }
@@ -329,6 +378,13 @@ function DiagnosticsPanel({
 }) {
   const counts = summary?.raw_osm_counts_by_power ?? {}
   const artifacts = summary?.handoff_artifacts ?? {}
+  const voltageInference = metadataRecord(summary?.solver_metadata, "voltage_inference")
+  const circuitClasses = metadataRecord(summary?.topology_metadata, "circuit_class_counts")
+  const solverCircuitClasses = metadataRecord(summary?.solver_metadata, "solver_circuit_class_counts")
+  const branchProvenance = metadataRecord(
+    metadataRecord(summary?.solver_metadata, "provenance_summary"),
+    "branch",
+  )
 
   return (
     <aside className="absolute bottom-3 right-3 top-3 z-[2] flex w-[390px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-[6px] border border-zinc-300 bg-[#fbfbfa]/95 shadow-[0_22px_70px_-42px_rgba(24,24,27,0.75)]">
@@ -380,21 +436,37 @@ function DiagnosticsPanel({
             <MetadataRow label="Load components" value={metric(summary, "load_bearing_component_count")} />
             <MetadataRow label="Largest bus share" value={summary?.solver_metadata.largest_component_bus_share} />
             <MetadataRow label="Severe mismatches" value={metric(summary, "severe_branch_voltage_mismatch_count")} />
+            <MetadataRow label="Dropped passive buses" value={summary?.solver_metadata.dropped_passive_bus_count} />
+            <MetadataRow label="Dropped non-OPF branches" value={summary?.solver_metadata.dropped_non_interfacility_branch_count} />
+          </div>
+        </section>
+
+        <section className="mt-4">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Reconstruction</h2>
+          <div className="mt-2 space-y-2">
+            <div>
+              <p className="mb-1 text-[11px] font-medium text-zinc-500">Voltage inference</p>
+              <CountBadges counts={voltageInference} />
+            </div>
+            <div>
+              <p className="mb-1 text-[11px] font-medium text-zinc-500">Preview circuit classes</p>
+              <CountBadges counts={circuitClasses} />
+            </div>
+            <div>
+              <p className="mb-1 text-[11px] font-medium text-zinc-500">Solver circuit classes</p>
+              <CountBadges counts={solverCircuitClasses} />
+            </div>
+            <div>
+              <p className="mb-1 text-[11px] font-medium text-zinc-500">Solver branch provenance</p>
+              <CountBadges counts={branchProvenance} />
+            </div>
           </div>
         </section>
 
         <section className="mt-4">
           <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Raw OSM counts</h2>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {Object.entries(counts).length ? (
-              Object.entries(counts).map(([power, count]) => (
-                <Badge key={power} variant="outline" className="rounded-[3px] border-zinc-300 bg-white/75">
-                  {styleFor(power).label} {count}
-                </Badge>
-              ))
-            ) : (
-              <p className="text-xs text-zinc-500">No ingested assets for this region.</p>
-            )}
+          <div className="mt-2">
+            <CountBadges counts={Object.fromEntries(Object.entries(counts).map(([power, count]) => [styleFor(power).label, count]))} />
           </div>
         </section>
 
@@ -608,15 +680,12 @@ function App() {
       return (topology?.branches ?? []).flatMap((branch) => {
         const coordinates = branchCoordinates(branch)
         if (coordinates.length < 2) return []
-        const synthetic = branch.provenance?.includes("public") || branch.id.startsWith("synthetic:")
+        const style = reconstructedRouteStyle(branch)
         return [{
           id: branch.id,
-          label: branch.name ?? branch.id,
+          label: `${branch.name ?? branch.id} (${branch.circuit_class ?? "unknown"})`,
           coordinates,
-          color: synthetic ? "#2563eb" : branch.power === "cable" ? "#6d6875" : "#b45309",
-          width: synthetic ? 3 : 4,
-          opacity: synthetic ? 0.78 : 0.9,
-          dashArray: synthetic ? [3, 2] as [number, number] : undefined,
+          ...style,
         }]
       })
     }
