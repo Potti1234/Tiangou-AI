@@ -275,6 +275,43 @@ type ConsumerProxyMarker = {
   lat: number
   lon: number
   reason: string
+  data_center_load_estimate?: {
+    estimated_it_mw: number
+    estimated_facility_mw: number
+    pue: number
+    method: string
+    provenance: string
+    confidence: number
+  } | null
+}
+
+type AssumptionTable = {
+  key: string
+  category: string
+  row_count: number
+  provenance_counts: Record<string, number>
+  rows: Array<Record<string, string>>
+}
+
+type AssumptionSummary = {
+  status: StageStatus
+  table_count: number
+  row_count: number
+  provenance_counts: Record<string, number>
+  warnings: Array<Record<string, unknown>>
+  errors: Array<Record<string, unknown>>
+  tables: Array<{
+    key: string
+    category: string
+    row_count: number
+    status: string
+    provenance_counts: Record<string, number>
+  }>
+}
+
+type AssumptionTransparency = {
+  summary: AssumptionSummary
+  tables: AssumptionTable[]
 }
 
 type StageStatus = "not_run" | "running" | "warning" | "error" | "complete" | "ok"
@@ -479,6 +516,24 @@ function numericRecord(value: unknown) {
   return Object.fromEntries(
     Object.entries(record).filter((entry): entry is [string, number] => typeof entry[1] === "number"),
   )
+}
+
+function assumptionRows(assumptions: AssumptionTransparency | null, tableKey: string) {
+  return assumptions?.tables.find((table) => table.key === tableKey)?.rows ?? []
+}
+
+function lowConfidenceAssumptionRows(assumptions: AssumptionTransparency | null) {
+  return (assumptions?.tables ?? [])
+    .flatMap((table) =>
+      table.rows.map((row) => ({
+        table: table.key,
+        row,
+        confidence: Number(row.confidence ?? 1),
+      })),
+    )
+    .filter((item) => Number.isFinite(item.confidence))
+    .sort((left, right) => left.confidence - right.confidence)
+    .slice(0, 5)
 }
 
 function provenanceClass(provenance: string | null | undefined) {
@@ -711,9 +766,13 @@ function MarkerTip({ title, rows }: { title: string; rows: Array<[string, string
 
 function DiagnosticsPanel({
   summary,
+  assumptions,
+  consumerProxies,
   mode,
 }: {
   summary: PipelineSummary | null
+  assumptions: AssumptionTransparency | null
+  consumerProxies: ConsumerProxyMarker[]
   mode: Mode
 }) {
   const counts = summary?.raw_osm_counts_by_power ?? {}
@@ -758,6 +817,17 @@ function DiagnosticsPanel({
   const reconciliationSummary = reconciliation?.summary
   const linearStatusCounts = statusCounts(reconciliationSummary, "linear_status_counts")
   const generationStatusCounts = statusCounts(reconciliationSummary, "generation_status_counts")
+  const lowConfidenceAssumptions = lowConfidenceAssumptionRows(assumptions)
+  const dataCenterEstimates = consumerProxies
+    .filter((proxy) => proxy.reason === "data_center" && proxy.data_center_load_estimate)
+    .sort((left, right) => (right.data_center_load_estimate?.estimated_facility_mw ?? 0) - (left.data_center_load_estimate?.estimated_facility_mw ?? 0))
+    .slice(0, 5)
+  const generatorRows = assumptionRows(assumptions, "generator_cost_availability_defaults")
+  const contingencyRows = assumptionRows(assumptions, "synthetic_contingency_library")
+  const importRows = assumptionRows(assumptions, "cross_border_import_limits")
+  const averageGeneratorAvailability = generatorRows.length
+    ? generatorRows.reduce((sum, row) => sum + Number(row.availability_factor ?? 0), 0) / generatorRows.length
+    : 0
 
   return (
     <aside className="absolute bottom-3 right-3 top-3 z-[2] flex w-[390px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-[6px] border border-zinc-300 bg-[#fbfbfa]/95 shadow-[0_22px_70px_-42px_rgba(24,24,27,0.75)]">
@@ -814,6 +884,88 @@ function DiagnosticsPanel({
             <MetadataRow label="Severe mismatches" value={metric(summary, "severe_branch_voltage_mismatch_count")} />
             <MetadataRow label="Dropped passive buses" value={summary?.solver_metadata.dropped_passive_bus_count} />
             <MetadataRow label="Dropped non-OPF branches" value={summary?.solver_metadata.dropped_non_interfacility_branch_count} />
+          </div>
+        </section>
+
+        <section className="mt-4">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Assumption transparency</h2>
+          <div className="mt-2 rounded-[4px] border border-zinc-200 bg-white/70 px-2">
+            <MetadataRow label="Assumption status" value={assumptions?.summary.status ?? "not loaded"} />
+            <MetadataRow label="Tables" value={assumptions?.summary.table_count} />
+            <MetadataRow label="Rows" value={assumptions?.summary.row_count} />
+            <MetadataRow label="Warnings" value={assumptions?.summary.warnings.length} />
+            <MetadataRow label="Errors" value={assumptions?.summary.errors.length} />
+            <MetadataRow label="Generator availability" value={averageGeneratorAvailability ? `${formatNumber(averageGeneratorAvailability * 100, 1)}% avg` : "n/a"} />
+            <MetadataRow label="Contingency cases" value={contingencyRows.length} />
+            <MetadataRow label="Import scenarios" value={importRows.length} />
+          </div>
+          <div className="mt-2 space-y-2">
+            <div>
+              <p className="mb-1 text-[11px] font-medium text-zinc-500">Observed, inferred, synthetic rows</p>
+              <CountBadges counts={assumptions?.summary.provenance_counts ?? {}} />
+            </div>
+            {lowConfidenceAssumptions.length > 0 && (
+              <div>
+                <p className="mb-1 text-[11px] font-medium text-zinc-500">Lowest-confidence assumptions</p>
+                <div className="space-y-1.5">
+                  {lowConfidenceAssumptions.map((item) => (
+                    <div key={`${item.table}-${item.row.source}-${item.row.method}-${item.confidence}`} className="rounded-[4px] border border-zinc-200 bg-white/75 p-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="min-w-0 truncate text-[11px] font-semibold text-zinc-950">{item.table.replaceAll("_", " ")}</p>
+                        <Badge variant="outline" className="shrink-0 rounded-[3px] border-zinc-300 bg-zinc-50 text-[10px]">
+                          {formatNumber(item.confidence, 2)}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-600">{item.row.assumptions ?? item.row.method ?? "No assumption text"}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {dataCenterEstimates.length > 0 && (
+              <div>
+                <p className="mb-1 text-[11px] font-medium text-zinc-500">Top assumed data-center loads</p>
+                <div className="space-y-1.5">
+                  {dataCenterEstimates.map((proxy) => (
+                    <div key={proxy.id} className="rounded-[4px] border border-zinc-200 bg-white/75 p-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="min-w-0 truncate text-[11px] font-semibold text-zinc-950">{consumerProxyTitle(proxy)}</p>
+                        <Badge variant="outline" className="shrink-0 rounded-[3px] border-blue-300 bg-blue-50 text-[10px] text-blue-900">
+                          {formatNumber(proxy.data_center_load_estimate?.estimated_facility_mw, 1)} MW
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-zinc-600">
+                        IT {formatNumber(proxy.data_center_load_estimate?.estimated_it_mw, 1)} MW, PUE {formatNumber(proxy.data_center_load_estimate?.pue, 2)}, {proxy.data_center_load_estimate?.provenance}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {generatorRows.length > 0 && (
+              <div>
+                <p className="mb-1 text-[11px] font-medium text-zinc-500">Generator availability summary</p>
+                <CountBadges counts={Object.fromEntries(generatorRows.slice(0, 6).map((row) => [String(row.energy_source), Math.round(Number(row.availability_factor ?? 0) * 100)]))} />
+              </div>
+            )}
+            {importRows.length > 0 && (
+              <div>
+                <p className="mb-1 text-[11px] font-medium text-zinc-500">Import constraints</p>
+                <div className="space-y-1.5">
+                  {importRows.slice(0, 4).map((row) => (
+                    <div key={row.boundary_id} className="rounded-[4px] border border-zinc-200 bg-white/75 p-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="min-w-0 truncate text-[11px] font-semibold text-zinc-950">{row.boundary_id?.replaceAll("_", " ")}</p>
+                        <Badge variant="outline" className="shrink-0 rounded-[3px] border-zinc-300 bg-zinc-50 text-[10px]">
+                          {formatNumber(Number(row.nominal_mw), 0)} MW
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-zinc-600">Derates {row.derate_scenarios}, {row.provenance}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </section>
 
@@ -1043,6 +1195,7 @@ function RawPanel({
 function App() {
   const [assets, setAssets] = useState<GridAsset[]>([])
   const [consumerProxies, setConsumerProxies] = useState<ConsumerProxyMarker[]>([])
+  const [assumptions, setAssumptions] = useState<AssumptionTransparency | null>(null)
   const [showConsumerProxies, setShowConsumerProxies] = useState(true)
   const [topology, setTopology] = useState<TopologyPreview | null>(null)
   const [caseData, setCaseData] = useState<PowerModelsCase | null>(null)
@@ -1065,20 +1218,62 @@ function App() {
     if (showLoading) setLoading(true)
     setError(null)
     try {
-      const [response, consumerResponse] = await Promise.all([
+      const [
+        response,
+        consumerResponse,
+        assumptionSummaryResponse,
+        assumptionLinesResponse,
+        assumptionTransformersResponse,
+        assumptionDemandProfilesResponse,
+        assumptionDataCentersResponse,
+        assumptionGeneratorsResponse,
+        assumptionContingenciesResponse,
+        assumptionImportsResponse,
+      ] = await Promise.all([
         fetch(`${API_BASE_URL}/grid/dashboard-snapshot?${query}`, {
           signal: controller.signal,
         }),
         fetch(`${API_BASE_URL}/grid/consumer-proxies/important?region_key=hong-kong&limit=${IMPORTANT_CONSUMER_LIMIT}`, {
           signal: controller.signal,
         }),
+        fetch(`${API_BASE_URL}/assumptions/summary`, { signal: controller.signal }),
+        fetch(`${API_BASE_URL}/assumptions/lines`, { signal: controller.signal }),
+        fetch(`${API_BASE_URL}/assumptions/transformers`, { signal: controller.signal }),
+        fetch(`${API_BASE_URL}/assumptions/demand-profiles`, { signal: controller.signal }),
+        fetch(`${API_BASE_URL}/assumptions/data-centers`, { signal: controller.signal }),
+        fetch(`${API_BASE_URL}/assumptions/generators`, { signal: controller.signal }),
+        fetch(`${API_BASE_URL}/assumptions/contingencies`, { signal: controller.signal }),
+        fetch(`${API_BASE_URL}/assumptions/imports`, { signal: controller.signal }),
       ])
       if (!response.ok) throw new Error(`API returned ${response.status}`)
       if (!consumerResponse.ok) throw new Error(`Consumer proxy API returned ${consumerResponse.status}`)
+      const assumptionResponses = [
+        assumptionSummaryResponse,
+        assumptionLinesResponse,
+        assumptionTransformersResponse,
+        assumptionDemandProfilesResponse,
+        assumptionDataCentersResponse,
+        assumptionGeneratorsResponse,
+        assumptionContingenciesResponse,
+        assumptionImportsResponse,
+      ]
+      if (assumptionResponses.some((item) => !item.ok)) throw new Error("Assumption API returned an error")
       const snapshot = await response.json() as DashboardSnapshot
       const importantConsumerProxies = await consumerResponse.json() as ConsumerProxyMarker[]
+      const assumptionSummary = await assumptionSummaryResponse.json() as AssumptionSummary
+      const assumptionTableGroups = await Promise.all([
+        assumptionLinesResponse.json() as Promise<AssumptionTable[]>,
+        assumptionTransformersResponse.json() as Promise<AssumptionTable[]>,
+        assumptionDemandProfilesResponse.json() as Promise<AssumptionTable[]>,
+        assumptionDataCentersResponse.json() as Promise<AssumptionTable[]>,
+        assumptionGeneratorsResponse.json() as Promise<AssumptionTable[]>,
+        assumptionContingenciesResponse.json() as Promise<AssumptionTable[]>,
+        assumptionImportsResponse.json() as Promise<AssumptionTable[]>,
+      ])
+      const assumptionTables = assumptionTableGroups.flat()
       setAssets(snapshot.assets)
       setConsumerProxies(importantConsumerProxies)
+      setAssumptions({ summary: assumptionSummary, tables: assumptionTables })
       setTopology(snapshot.topology)
       setCaseData(snapshot.powermodels_case)
       setSummary(snapshot.summary)
@@ -1530,7 +1725,7 @@ function App() {
           </div>
         )}
 
-        <DiagnosticsPanel summary={summary} mode={mode} />
+        <DiagnosticsPanel summary={summary} assumptions={assumptions} consumerProxies={consumerProxies} mode={mode} />
         <RawPanel asset={selectedAsset} onClose={() => setSelectedAssetId(null)} />
       </div>
     </main>

@@ -30,3 +30,18 @@ def test_frontend_restarts_dashboard_load_when_previous_request_is_in_flight() -
     assert "if (loadInFlight.current) dashboardAbort.current?.abort()" in source
     assert "if (dashboardAbort.current === controller) {" in source
     assert "loadInFlight.current = false" in source
+
+
+def test_frontend_fetches_and_renders_assumption_transparency() -> None:
+    source = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+
+    assert "type AssumptionTransparency" in source
+    assert "setAssumptions" in source
+    assert "/assumptions/summary" in source
+    assert "/assumptions/demand-profiles" in source
+    assert "/assumptions/imports" in source
+    assert "Assumption transparency" in source
+    assert "Lowest-confidence assumptions" in source
+    assert "Top assumed data-center loads" in source
+    assert "Generator availability summary" in source
+    assert "Import constraints" in source
