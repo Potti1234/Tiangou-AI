@@ -137,6 +137,18 @@ python -m app.gridsfm_solver check
 python -m app.gridsfm_solver run data/processed/hong_kong_phase1_manifest.json
 ```
 
+Phase 1 bundles now write two explicit export classes:
+
+- Raw demo exports such as `hong_kong_16h_model.json` retain the visual/demo OSM-derived topology for dashboard inspection. These files are not claimed to be AC-feasible.
+- Solver-grade exports such as `hong_kong_16h_model.solver_sanitized.json` are labeled with `solver_sanitized: true`, include `sanitization_actions`, and are the inputs used for GridSFM `.solvable.json`, `.pyg.json`, and scenario artifacts.
+
+Sanitization is auditable rather than silent. The current AC handoff removes passive no-load/no-generation islands, caps large inferred branch shunts, zeros charging on short synthetic connectors, widens reactive generator ranges for relaxed AC feasibility, and normalizes reference buses per connected component. Diagnostic reports are written under `data/processed/diagnostics/` and can be regenerated directly:
+
+```powershell
+python -m app.diagnose_gridsfm_case data/processed/hong_kong_16h_model.json
+python -m app.diagnose_gridsfm_case data/processed/hong_kong_16h_model.solver_sanitized.json
+```
+
 The generated PowerShell handoff is still available and defaults to `third_party\gridsfm_solver`:
 
 ```powershell
@@ -153,19 +165,16 @@ python -m app.verify_gridsfm_handoff data/processed/hong_kong_phase1_manifest.js
 
 The embedded solver files under `third_party/gridsfm_solver` are a minimal MIT-licensed copy of GridSFM's `power_grid/US/topology_solver_pipeline`; see `third_party/gridsfm_solver/LICENSE` and `third_party/gridsfm_solver/NOTICE.md`.
 
-Current Hong Kong Phase 1 smoke status, using `--include-hk-interties --min-voltage-kv 100 --solver-include-policy demo_full_osm --include-synthetic-generator-connections --n-per-mode 1`:
+Current Hong Kong Phase 1 smoke status, using `--include-hk-interties --solver-include-policy demo_full_osm --include-synthetic-generator-connections --n-per-mode 3`:
 
-- Tiangou validation is `warning` for both `hong_kong_16h_model.json` and `hong_kong_04h_model.json`, with zero structural errors and zero severe branch-voltage mismatches.
-- The exported demo solver case has 51 buses, 60 solver branches, 55 loads, 7 generators/imports, 5 islands, about 9,492 MW peak demand, and about 23,032 MW total Pmax.
+- Raw demo exports are retained at 57 buses, 63 branches, 55 loads, 7 generators/imports, about 9,492 MW peak demand, and about 23,032 MW total Pmax. They still show solver-grade diagnostics such as passive islands, large inferred shunts, and branch-voltage mismatches.
+- Solver-sanitized exports are 43 buses and 56 branches after removing passive islands. Both 16h and 04h solver-grade cases solve strict GridSFM/PowerModels AC-OPF at L0 and generate fresh `.solver_sanitized.solvable.json` and `.solver_sanitized.pyg.json` files.
+- `verify_gridsfm_handoff` reports `status: ok` for the solver-grade exports and counts 32 fresh scenario JSON files across the two sanitized snapshots. Old raw-demo scenario folders may remain on disk, but they are not used for solver-grade freshness checks.
 - Processed artifacts were regenerated after full OSM generator promotion with `solver_include_policy=demo_full_osm`, `min_solver_generator_mw=0.5`, and synthetic generator connections enabled.
 - Promoted OSM generators include Lamma Power Station, Lamma Winds, Castle Peak Power Station, and Black Point Power Station; the tagged OSM generator total is about 10,646 MW, with Lamma Power Station at 3,736 MW and Lamma Winds at 0.8 MW.
-- Warnings include documented synthetic generator connections, inferred voltages, passive no-load islands retained by the demo policy, and CLP spatial demand inferred from public territory totals.
-- GridSFM `solve_topo_json.jl` writes documented `L5` relaxed handoff files for both snapshots after cold-strict checks fail with `NORM_LIMIT`.
-- `export_gridsfm_data.jl` writes both `.pyg.json` files with a relaxed-handoff warning and `NORM_LIMIT` termination metadata.
-- `solve_pyg_json.jl` reports objective-matching round trips for both base PyG exports.
-- `gen_perturbed_data.jl` with `n_per_mode=1` writes 12 scenario JSON files across the two snapshots; current scenario solves are marked infeasible and should be treated as diagnostic artifacts, not operationally feasible dispatch cases.
+- Warnings include documented synthetic generator connections, inferred voltages, residual non-severe voltage mismatches, and CLP spatial demand inferred from public territory totals.
 
-The dashboard and API now default solver previews to `solver_include_policy=demo_full_osm` for visual completeness. A current Hong Kong demo preview audit retains 51 solver buses, 60 branches, 55 loads, 7 generators/imports, and 6 tagged OSM generators, including Lamma Power Station at 3736 MW and Lamma Winds at 0.8 MW. Demo-retained inferred assets are tagged with explicit provenance and validation warnings, while `strict_transmission` remains available for conservative export comparison.
+The dashboard and API default full-demo previews to `solver_include_policy=demo_full_osm` without a minimum-voltage filter for visual completeness, while transmission mode keeps `min_voltage_kv=100`. The dashboard reports raw demo counts and solver-grade artifact status separately so a solved sanitized handoff is not presented as proof that the raw visual model is AC-feasible. Demo-retained inferred assets are tagged with explicit provenance and validation warnings, while `strict_transmission` remains available for conservative export comparison.
 
 This preview uses OSM geometry, table-backed voltage-class impedance/charging/rating defaults, public Hong Kong peak-demand anchors, and territory-level equivalent generators. Treat it as an upstream topology-builder artifact for the Julia relaxation/export pipeline, not as an operational grid model.
 Exported buses, branches, loads, and generators retain `provenance` and `confidence` annotations, with aggregate counts in `_metadata.provenance_summary`, so inferred values can be audited before scenario generation.
