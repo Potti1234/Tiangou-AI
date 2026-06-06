@@ -648,6 +648,7 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
 
     island_report = _case_island_report(buses, branches, loads, generators)
     quality_metrics = _case_quality_metrics(buses, branches, loads, generators)
+    voltage_mismatches = _branch_voltage_mismatches(buses, branches)
     for island in island_report["islands"]:
         if island["gen_count"] > 0 and island["reference_bus_count"] == 0:
             errors.append(
@@ -700,8 +701,10 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
             "island_count": island_report["island_count"],
             "low_confidence_counts": quality_metrics["low_confidence_counts"],
             "provenance_summary": quality_metrics["provenance_summary"],
+            "branch_voltage_mismatch_count": len(voltage_mismatches),
         },
         "islands": island_report["islands"],
+        "voltage_mismatches": voltage_mismatches,
     }
 
 
@@ -782,6 +785,52 @@ def _case_quality_metrics(
             for name, items in collections.items()
         },
     }
+
+
+def _branch_voltage_mismatches(
+    buses: Mapping[str, Any],
+    branches: Mapping[str, Any],
+    *,
+    tolerance: float = 0.15,
+) -> list[dict[str, Any]]:
+    bus_by_i = {
+        int(bus["bus_i"]): bus
+        for bus in buses.values()
+        if "bus_i" in bus
+    }
+    mismatches = []
+    for branch_id, branch in branches.items():
+        branch_voltage = branch.get("matched_voltage_kv")
+        if branch_voltage is None:
+            continue
+        mismatched_endpoints = []
+        for endpoint_field in ("f_bus", "t_bus"):
+            if endpoint_field not in branch:
+                continue
+            bus = bus_by_i.get(int(branch[endpoint_field]))
+            if not bus:
+                continue
+            bus_voltage = bus.get("base_kv")
+            if bus_voltage is None:
+                continue
+            if abs(float(bus_voltage) - float(branch_voltage)) / float(branch_voltage) > tolerance:
+                mismatched_endpoints.append(
+                    {
+                        "endpoint": endpoint_field,
+                        "bus_i": bus["bus_i"],
+                        "bus_base_kv": bus_voltage,
+                    }
+                )
+        if mismatched_endpoints:
+            mismatches.append(
+                {
+                    "branch_id": branch_id,
+                    "source_id": branch.get("source_id"),
+                    "branch_voltage_kv": branch_voltage,
+                    "endpoints": mismatched_endpoints,
+                }
+            )
+    return mismatches
 
 
 def _confidence(item: Mapping[str, Any]) -> float:

@@ -263,9 +263,24 @@ def test_powermodels_validation_reports_islands_and_capacity() -> None:
     assert validation["metrics"]["island_count"] == 2
     assert validation["metrics"]["total_pd_mw"] == 9591.0
     assert validation["metrics"]["low_confidence_counts"] == {"branch": 0, "bus": 2, "gen": 2, "load": 4}
+    assert validation["metrics"]["branch_voltage_mismatch_count"] == 1
     assert validation["metrics"]["provenance_summary"]["load"] == {
         "public_peak_demand_scaled_voltage_weighted_substation_split": 4
     }
+    assert validation["voltage_mismatches"] == [
+        {
+            "branch_id": "1",
+            "source_id": "osm:way:10",
+            "branch_voltage_kv": 400.0,
+            "endpoints": [
+                {
+                    "endpoint": "t_bus",
+                    "bus_i": 2,
+                    "bus_base_kv": 132.0,
+                }
+            ],
+        }
+    ]
     assert validation["errors"] == []
     assert all(island["reference_bus_count"] == 1 for island in validation["islands"])
 
