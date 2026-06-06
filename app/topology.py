@@ -93,6 +93,30 @@ def normalize_voltage(raw: Any) -> list[float]:
     return unique
 
 
+def parse_power_mw(raw: Any) -> float | None:
+    if raw in (None, ""):
+        return None
+    text = str(raw).lower().replace(",", "").strip()
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*([kmgt]?w)?", text)
+    if not match:
+        return None
+    value = float(match.group(1))
+    unit = match.group(2) or "mw"
+    if unit == "kw":
+        value /= 1000.0
+    elif unit == "gw":
+        value *= 1000.0
+    elif unit == "tw":
+        value *= 1_000_000.0
+    elif unit not in {"mw", "w"}:
+        return None
+    elif unit == "w":
+        value /= 1_000_000.0
+    if value <= 0:
+        return None
+    return round(value, 3)
+
+
 def voltage_band(voltage_kv: float | None) -> str:
     if voltage_kv is None:
         return "unknown"
@@ -183,6 +207,20 @@ def _branch_defaults(power: str, voltage_kv: float | None) -> dict[str, Any]:
     return defaults
 
 
+def _generator_capacity(tags: Mapping[str, Any]) -> tuple[float | None, str | None]:
+    for key in (
+        "generator:output:electricity",
+        "plant:output:electricity",
+        "output:electricity",
+        "generator:output",
+        "capacity",
+    ):
+        value = parse_power_mw(tags.get(key))
+        if value is not None:
+            return value, key
+    return None, None
+
+
 def _row_to_record(row: Any) -> dict[str, Any]:
     data = dict(row)
     tags = _load_json(data.pop("tags_json", None), {})
@@ -228,6 +266,7 @@ def build_topology_preview(
             }
         )
         if record["power"] in {"plant", "generator"}:
+            pmax_mw, capacity_tag = _generator_capacity(record["tags"])
             generators.append(
                 {
                     "id": f"gen:{record['osm_type']}:{record['osm_id']}",
@@ -235,9 +274,10 @@ def build_topology_preview(
                     "name": record.get("name"),
                     "source": record["tags"].get("generator:source"),
                     "method": record["tags"].get("generator:method"),
-                    "pmax_mw": None,
-                    "provenance": "osm_without_capacity",
-                    "confidence": 0.45,
+                    "pmax_mw": pmax_mw,
+                    "capacity_tag": capacity_tag,
+                    "provenance": "osm_capacity_tag" if pmax_mw is not None else "osm_without_capacity",
+                    "confidence": 0.7 if pmax_mw is not None else 0.45,
                 }
             )
 
@@ -367,9 +407,12 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
         if branch.get("from_bus_id") and branch.get("to_bus_id") and branch.get("from_bus_id") != branch.get("to_bus_id")
     ]
     loads = list(topology["loads"])
+    tagged_generators = _tagged_generators(topology.get("generators", []))
+    equivalent_generators = _equivalent_generators(buses, loads)
+    all_generators = [*tagged_generators, *equivalent_generators]
 
     bus_id_map = {bus["id"]: str(index) for index, bus in enumerate(buses, start=1)}
-    gen_bus_ids = set(_equivalent_generator_buses(buses, loads))
+    gen_bus_ids = {generator["bus_id"] for generator in all_generators}
     load_bus_ids = {load["bus_id"] for load in loads}
     reference_bus_id = _reference_bus_id(buses, gen_bus_ids)
 
@@ -407,7 +450,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
         }
 
     gen_dict = {}
-    for index, generator in enumerate(_equivalent_generators(buses, loads), start=1):
+    for index, generator in enumerate(all_generators, start=1):
         gen_dict[str(index)] = {
             "index": index,
             "source_id": generator["id"],
@@ -449,8 +492,12 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "branch_count": len(branch_dict),
             "load_count": len(load_dict),
             "gen_count": len(gen_dict),
+            "tagged_gen_count": len(tagged_generators),
+            "equivalent_gen_count": len(equivalent_generators),
             "total_pd_mw": round(sum(load["pd_mw"] for load in loads), 3),
-            "total_equivalent_pmax_mw": round(sum(gen["pmax_mw"] for gen in _equivalent_generators(buses, loads)), 3),
+            "total_tagged_pmax_mw": round(sum(gen["pmax_mw"] for gen in tagged_generators), 3),
+            "total_equivalent_pmax_mw": round(sum(gen["pmax_mw"] for gen in equivalent_generators), 3),
+            "total_pmax_mw": round(sum(gen["pmax_mw"] for gen in all_generators), 3),
             "notes": [
                 "This is a PowerModels handoff preview built from public OSM topology and inferred parameters.",
                 "Equivalent generators represent territory-level local supply or imports; run relaxation and validation before optimization.",
@@ -684,11 +731,37 @@ def _powermodels_branch(
     }
 
 
-def _equivalent_generator_buses(
-    buses: list[dict[str, Any]],
-    loads: list[dict[str, Any]],
-) -> list[str]:
-    return [generator["bus_id"] for generator in _equivalent_generators(buses, loads)]
+def _tagged_generators(generators: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    tagged = []
+    for generator in generators:
+        pmax_mw = generator.get("pmax_mw")
+        if pmax_mw is None:
+            continue
+        tagged.append(
+            {
+                "id": generator["id"],
+                "bus_id": generator["bus_id"],
+                "service_territory": None,
+                "pmax_mw": float(pmax_mw),
+                "cost": _generator_cost(generator.get("source")),
+            }
+        )
+    return tagged
+
+
+def _generator_cost(source: Any) -> list[float]:
+    source_text = str(source or "").lower()
+    if "coal" in source_text:
+        return [0.012, 26.0, 0.0]
+    if "gas" in source_text:
+        return [0.01, 22.0, 0.0]
+    if "nuclear" in source_text:
+        return [0.004, 12.0, 0.0]
+    if "solar" in source_text or "wind" in source_text:
+        return [0.0, 2.0, 0.0]
+    if "waste" in source_text:
+        return [0.006, 18.0, 0.0]
+    return [0.01, 24.0, 0.0]
 
 
 def _equivalent_generators(

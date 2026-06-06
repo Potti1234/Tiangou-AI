@@ -2,6 +2,7 @@ from app.topology import (
     build_powermodels_preview,
     build_topology_preview,
     normalize_voltage,
+    parse_power_mw,
     validate_powermodels_case,
 )
 
@@ -10,6 +11,13 @@ def test_normalize_voltage_accepts_common_osm_formats() -> None:
     assert normalize_voltage("400000;132000") == [400.0, 132.0]
     assert normalize_voltage("275 kV / 132 kV") == [275.0, 132.0]
     assert normalize_voltage("110000;110000;bad") == [110.0]
+
+
+def test_parse_power_mw_accepts_common_capacity_units() -> None:
+    assert parse_power_mw("800 MW") == 800.0
+    assert parse_power_mw("1.2 GW") == 1200.0
+    assert parse_power_mw("750000 kW") == 750.0
+    assert parse_power_mw("bad") is None
 
 
 def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
@@ -71,6 +79,40 @@ def test_powermodels_preview_exports_overnight_snapshot() -> None:
     assert sum(gen["pmax"] for gen in overnight_case["gen"].values()) == sum(
         gen["pmax"] for gen in peak_case["gen"].values()
     )
+
+
+def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
+    rows = [
+        *_sample_rows(),
+        {
+            "osm_type": "node",
+            "osm_id": 50,
+            "power": "plant",
+            "name": "Tagged Gas Plant",
+            "voltage": "400000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.32,
+            "lon": 114.12,
+            "tags_json": '{"operator": "CLP Power", "generator:source": "gas", "generator:output:electricity": "800 MW"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+    ]
+
+    topology = build_topology_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+
+    tagged_preview = next(generator for generator in topology["generators"] if generator["id"] == "gen:node:50")
+    assert tagged_preview["pmax_mw"] == 800.0
+    assert tagged_preview["capacity_tag"] == "generator:output:electricity"
+    assert case["_metadata"]["tagged_gen_count"] == 1
+    assert case["_metadata"]["equivalent_gen_count"] == 2
+    assert case["_metadata"]["total_tagged_pmax_mw"] == 800.0
+    assert any(generator["source_id"] == "gen:node:50" for generator in case["gen"].values())
 
 
 def test_topology_preview_rejects_unknown_demand_snapshot() -> None:
