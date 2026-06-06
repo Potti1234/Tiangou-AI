@@ -6,7 +6,14 @@ from typing import Any
 from app.database import connect
 from app.gridsfm_solver_config import DEFAULT_GRIDSFM_SOLVER_DIR, REQUIRED_SOLVER_SCRIPTS
 from app.repository import list_consumer_proxy_allocation_rows, list_elements
-from app.topology import DEMAND_SNAPSHOTS, build_powermodels_preview, validate_powermodels_case
+from app.topology import (
+    DEFAULT_MIN_SOLVER_GENERATOR_MW,
+    DEFAULT_SOLVER_INCLUDE_POLICY,
+    DEMAND_SNAPSHOTS,
+    SOLVER_INCLUDE_POLICIES,
+    build_powermodels_preview,
+    validate_powermodels_case,
+)
 
 
 DEMAND_SNAPSHOT_EXPORTS = (
@@ -31,6 +38,9 @@ def export_powermodels_case(
     include_hk_interties: bool = False,
     hk_intertie_derate: float = 1.0,
     min_voltage_kv: float | None = None,
+    solver_include_policy: str = DEFAULT_SOLVER_INCLUDE_POLICY,
+    min_solver_generator_mw: float = DEFAULT_MIN_SOLVER_GENERATOR_MW,
+    include_synthetic_generator_connections: bool = True,
     allow_validation_errors: bool = False,
 ) -> dict[str, Any]:
     with connect(database_path) as conn:
@@ -45,6 +55,9 @@ def export_powermodels_case(
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
         consumer_proxies=[dict(row) for row in proxy_rows],
+        solver_include_policy=solver_include_policy,
+        min_solver_generator_mw=min_solver_generator_mw,
+        include_synthetic_generator_connections=include_synthetic_generator_connections,
     )
     validation = validate_powermodels_case(case)
     if validation["status"] == "error" and not allow_validation_errors:
@@ -60,6 +73,9 @@ def export_powermodels_case(
         "include_hk_interties": include_hk_interties,
         "hk_intertie_derate": hk_intertie_derate,
         "min_voltage_kv": min_voltage_kv,
+        "solver_include_policy": solver_include_policy,
+        "min_solver_generator_mw": min_solver_generator_mw,
+        "include_synthetic_generator_connections": include_synthetic_generator_connections,
         "validation": validation,
         "metadata": case["_metadata"],
     }
@@ -75,6 +91,9 @@ def export_hong_kong_phase1_bundle(
     intertie_derate_scenarios: tuple[float, ...] | None = None,
     demand_snapshots: tuple[str, ...] | None = None,
     min_voltage_kv: float | None = None,
+    solver_include_policy: str = DEFAULT_SOLVER_INCLUDE_POLICY,
+    min_solver_generator_mw: float = DEFAULT_MIN_SOLVER_GENERATOR_MW,
+    include_synthetic_generator_connections: bool = True,
     n_per_mode: int = 1,
     allow_validation_errors: bool = False,
 ) -> dict[str, Any]:
@@ -102,6 +121,9 @@ def export_hong_kong_phase1_bundle(
                     include_hk_interties=include_hk_interties,
                     hk_intertie_derate=derate,
                     min_voltage_kv=min_voltage_kv,
+                    solver_include_policy=solver_include_policy,
+                    min_solver_generator_mw=min_solver_generator_mw,
+                    include_synthetic_generator_connections=include_synthetic_generator_connections,
                     allow_validation_errors=allow_validation_errors,
                 )
             )
@@ -113,6 +135,9 @@ def export_hong_kong_phase1_bundle(
         "intertie_derate_scenarios": list(derate_scenarios),
         "demand_snapshots": list(bundle_snapshots),
         "min_voltage_kv": min_voltage_kv,
+        "solver_include_policy": solver_include_policy,
+        "min_solver_generator_mw": min_solver_generator_mw,
+        "include_synthetic_generator_connections": include_synthetic_generator_connections,
         "n_per_mode": n_per_mode,
         "exports": exports,
     }
@@ -242,6 +267,31 @@ def main() -> None:
         help="Drop known bus/branch assets below this voltage before topology export, e.g. 100 for transmission-level handoff.",
     )
     parser.add_argument(
+        "--solver-include-policy",
+        choices=sorted(SOLVER_INCLUDE_POLICIES),
+        default=DEFAULT_SOLVER_INCLUDE_POLICY,
+        help="Solver retention policy for exported PowerModels cases.",
+    )
+    parser.add_argument(
+        "--min-solver-generator-mw",
+        type=float,
+        default=DEFAULT_MIN_SOLVER_GENERATOR_MW,
+        help="Minimum tagged OSM generator capacity promoted into the solver case.",
+    )
+    parser.add_argument(
+        "--include-synthetic-generator-connections",
+        dest="include_synthetic_generator_connections",
+        action="store_true",
+        default=True,
+        help="Connect promoted OSM generators to nearby retained substations when required.",
+    )
+    parser.add_argument(
+        "--no-synthetic-generator-connections",
+        dest="include_synthetic_generator_connections",
+        action="store_false",
+        help="Disable synthetic connections for promoted OSM generators.",
+    )
+    parser.add_argument(
         "--intertie-derate-scenarios",
         type=_parse_derate_scenarios,
         help="Comma-separated intertie derates for --hong-kong-phase1-bundle, for example 1.0,0.75,0.5.",
@@ -279,6 +329,9 @@ def main() -> None:
             intertie_derate_scenarios=args.intertie_derate_scenarios,
             demand_snapshots=args.bundle_demand_snapshots,
             min_voltage_kv=args.min_voltage_kv,
+            solver_include_policy=args.solver_include_policy,
+            min_solver_generator_mw=args.min_solver_generator_mw,
+            include_synthetic_generator_connections=args.include_synthetic_generator_connections,
             n_per_mode=args.n_per_mode,
             allow_validation_errors=args.allow_validation_errors,
         )
@@ -292,6 +345,9 @@ def main() -> None:
             include_hk_interties=args.include_hk_interties,
             hk_intertie_derate=args.hk_intertie_derate,
             min_voltage_kv=args.min_voltage_kv,
+            solver_include_policy=args.solver_include_policy,
+            min_solver_generator_mw=args.min_solver_generator_mw,
+            include_synthetic_generator_connections=args.include_synthetic_generator_connections,
             allow_validation_errors=args.allow_validation_errors,
         )
     print(json.dumps(result, indent=2, sort_keys=True))

@@ -135,6 +135,29 @@ def test_export_powermodels_case_applies_min_voltage_filter(tmp_path) -> None:
     assert payload["_metadata"]["branch_count"] == 1
 
 
+def test_export_powermodels_case_preserves_solver_policy_settings(tmp_path) -> None:
+    db_path = tmp_path / "grid.sqlite3"
+    output_path = tmp_path / "policy.json"
+    _seed_grid(db_path)
+
+    result = export_powermodels_case(
+        database_path=db_path,
+        output_path=output_path,
+        snap_tolerance_km=0.2,
+        solver_include_policy="strict_transmission",
+        min_solver_generator_mw=12.5,
+        include_synthetic_generator_connections=False,
+    )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result["solver_include_policy"] == "strict_transmission"
+    assert result["min_solver_generator_mw"] == 12.5
+    assert result["include_synthetic_generator_connections"] is False
+    assert payload["_metadata"]["solver_include_policy"] == "strict_transmission"
+    assert payload["_metadata"]["min_solver_generator_mw"] == 12.5
+    assert payload["_metadata"]["include_synthetic_generator_connections"] is False
+
+
 def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_path) -> None:
     db_path = tmp_path / "grid.sqlite3"
     output_dir = tmp_path / "processed"
@@ -147,6 +170,9 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
         snap_tolerance_km=0.2,
         include_hk_interties=True,
         hk_intertie_derate=0.5,
+        solver_include_policy="demo_full_osm",
+        min_solver_generator_mw=0.5,
+        include_synthetic_generator_connections=True,
         n_per_mode=3,
     )
 
@@ -164,6 +190,9 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert result["hk_intertie_derate"] == 0.5
     assert result["intertie_derate_scenarios"] == [0.5]
     assert result["demand_snapshots"] == ["peak_16h", "overnight_04h"]
+    assert result["solver_include_policy"] == "demo_full_osm"
+    assert result["min_solver_generator_mw"] == 0.5
+    assert result["include_synthetic_generator_connections"] is True
     assert result["n_per_mode"] == 3
     assert len(result["exports"]) == 2
 
@@ -174,6 +203,9 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert overnight["demand_snapshot"] == "overnight_04h"
     assert peak["_metadata"]["include_hk_interties"] is True
     assert peak["_metadata"]["hk_intertie_derate"] == 0.5
+    assert peak["_metadata"]["solver_include_policy"] == "demo_full_osm"
+    assert peak["_metadata"]["min_solver_generator_mw"] == 0.5
+    assert peak["_metadata"]["include_synthetic_generator_connections"] is True
     handoff_script = handoff_path.read_text(encoding="utf-8")
     assert "Get-Command julia" in handoff_script
     assert "julia --version" in handoff_script
@@ -205,6 +237,12 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     ]
     assert manifest["solver_handoff"]["grids_solvable_path"] == str(grids_solvable_path)
     assert manifest["solver_handoff"]["n_per_mode"] == 3
+    assert manifest["solver_include_policy"] == "demo_full_osm"
+    assert manifest["min_solver_generator_mw"] == 0.5
+    assert manifest["include_synthetic_generator_connections"] is True
+    assert manifest["exports"][0]["solver_include_policy"] == "demo_full_osm"
+    assert manifest["exports"][0]["min_solver_generator_mw"] == 0.5
+    assert manifest["exports"][0]["include_synthetic_generator_connections"] is True
     assert manifest["exports"][0]["validation"]["status"] == "warning"
     assert manifest["exports"][0]["validation"]["warnings"][0]["code"] == "clp_inferred_from_territory_total"
 
