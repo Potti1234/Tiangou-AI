@@ -27,6 +27,8 @@ def check_julia_available() -> dict[str, Any]:
             ["julia", "--version"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
     except OSError as exc:
@@ -154,6 +156,8 @@ def _run_command(command: Sequence[str]) -> dict[str, Any]:
             list(command),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
     except OSError as exc:
@@ -209,4 +213,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

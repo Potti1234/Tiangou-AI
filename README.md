@@ -145,17 +145,19 @@ python -m app.verify_gridsfm_handoff data/processed/hong_kong_phase1_manifest.js
 
 The embedded solver files under `third_party/gridsfm_solver` are a minimal MIT-licensed copy of GridSFM's `power_grid/US/topology_solver_pipeline`; see `third_party/gridsfm_solver/LICENSE` and `third_party/gridsfm_solver/NOTICE.md`.
 
-Current Hong Kong Phase 1 smoke status, using `--include-hk-interties --min-voltage-kv 100 --n-per-mode 1`:
+Current Hong Kong Phase 1 smoke status, using `--include-hk-interties --min-voltage-kv 100 --solver-include-policy demo_full_osm --include-synthetic-generator-connections --n-per-mode 1`:
 
-- Tiangou validation is `ok` for both `hong_kong_16h_model.json` and `hong_kong_04h_model.json`.
-- The exported solver case has 37 buses, 50 inter-facility branches, 16 loads, 3 generators/imports, one connected island, and zero severe branch-voltage mismatches.
-- Reconstruction includes 2 merged OSM circuits, 1 inferred multi-voltage facility transformer, and 8 transparent service-territory backbone branches in the retained solver case.
-- GridSFM `solve_topo_json.jl` solves both snapshots at `L0` strict.
-- `export_gridsfm_data.jl` writes both `.pyg.json` files.
-- `solve_pyg_json.jl` reports `RESOLVE ok` for both base PyG exports.
-- `gen_perturbed_data.jl` with `n_per_mode=1` writes 12 feasible scenario JSON files across the two snapshots.
+- Tiangou validation is `warning` for both `hong_kong_16h_model.json` and `hong_kong_04h_model.json`, with zero structural errors and zero severe branch-voltage mismatches.
+- The exported demo solver case has 51 buses, 60 solver branches, 55 loads, 7 generators/imports, 5 islands, about 9,492 MW peak demand, and about 23,032 MW total Pmax.
+- Processed artifacts were regenerated after full OSM generator promotion with `solver_include_policy=demo_full_osm`, `min_solver_generator_mw=0.5`, and synthetic generator connections enabled.
+- Promoted OSM generators include Lamma Power Station, Lamma Winds, Castle Peak Power Station, and Black Point Power Station; the tagged OSM generator total is about 10,646 MW, with Lamma Power Station at 3,736 MW and Lamma Winds at 0.8 MW.
+- Warnings include documented synthetic generator connections, inferred voltages, passive no-load islands retained by the demo policy, and CLP spatial demand inferred from public territory totals.
+- GridSFM `solve_topo_json.jl` writes documented `L5` relaxed handoff files for both snapshots after cold-strict checks fail with `NORM_LIMIT`.
+- `export_gridsfm_data.jl` writes both `.pyg.json` files with a relaxed-handoff warning and `NORM_LIMIT` termination metadata.
+- `solve_pyg_json.jl` reports objective-matching round trips for both base PyG exports.
+- `gen_perturbed_data.jl` with `n_per_mode=1` writes 12 scenario JSON files across the two snapshots; current scenario solves are marked infeasible and should be treated as diagnostic artifacts, not operationally feasible dispatch cases.
 
-The dashboard and API now default solver previews to `solver_include_policy=demo_full_osm` for visual completeness. A current Hong Kong demo preview audit retains 56 solver buses, 61 branches, 63 loads, 8 generators, and 6 tagged OSM generators, including Lamma Power Station at 3736 MW and Lamma Winds at 0.8 MW. Demo-retained inferred assets are tagged with explicit provenance and validation warnings, while `strict_transmission` remains available for conservative export comparison.
+The dashboard and API now default solver previews to `solver_include_policy=demo_full_osm` for visual completeness. A current Hong Kong demo preview audit retains 51 solver buses, 60 branches, 55 loads, 7 generators/imports, and 6 tagged OSM generators, including Lamma Power Station at 3736 MW and Lamma Winds at 0.8 MW. Demo-retained inferred assets are tagged with explicit provenance and validation warnings, while `strict_transmission` remains available for conservative export comparison.
 
 This preview uses OSM geometry, voltage-class impedance and charging defaults, public Hong Kong peak-demand anchors, and territory-level equivalent generators. Treat it as an upstream topology-builder artifact for the Julia relaxation/export pipeline, not as an operational grid model.
 Exported buses, branches, loads, and generators retain `provenance` and `confidence` annotations, with aggregate counts in `_metadata.provenance_summary`, so inferred values can be audited before scenario generation.

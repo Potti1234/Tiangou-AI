@@ -106,13 +106,46 @@ end
 
 
 "Iterate levels until cold-strict passes. Write winner to `output_path`."
+function best_effort_rm(path::AbstractString)
+    if !isfile(path)
+        return
+    end
+    try
+        rm(path; force=true)
+    catch e
+        @warn "    could not remove temporary file $(basename(path)): $(first(sprint(showerror,e), 200))"
+    end
+end
+
+
+function mark_relaxed_handoff!(path::AbstractString, label::AbstractString, cold_status::AbstractString)
+    data = JSON.parsefile(path)
+    relaxation = get(data, "_relaxation", Dict{String,Any}())
+    relaxation["cold_strict_verified"] = false
+    relaxation["cold_strict_status"] = cold_status
+    relaxation["handoff_acceptance"] = "relaxed_trial_after_cold_strict_failure"
+    relaxation["handoff_note"] = "Demo full OSM case retained at $label after all cold-strict checks failed; use as heuristic handoff artifact, not a strict AC-OPF proof."
+    data["_relaxation"] = relaxation
+    accepted_path = path * ".accepted.json"
+    open(accepted_path, "w") do io
+        JSON.print(io, data, 2)
+    end
+    return accepted_path
+end
+
+
 function make_solvable(input_path::AbstractString, output_path::AbstractString)
     @info "solve: $(basename(input_path)) → $(basename(output_path))"
-    tmp_path = output_path * ".tmp.json"
+    tmp_paths = String[]
+    fallback_tmp = nothing
+    fallback_label = ""
+    fallback_status = "UNKNOWN"
     for L in LEVEL_ORDER
         lbl = L == 6 ? "AC1" : "L$L"
+        tmp_path = output_path * ".tmp.$lbl.json"
+        push!(tmp_paths, tmp_path)
         @info "  Trying $lbl"
-        isfile(tmp_path) && rm(tmp_path)
+        best_effort_rm(tmp_path)
         solved_level = solve_at_level(input_path, tmp_path, L)
         if solved_level < 0 || !isfile(tmp_path)
             @info "    pipeline did not save at $lbl, moving on"
@@ -122,13 +155,31 @@ function make_solvable(input_path::AbstractString, output_path::AbstractString)
         solved, term, obj = cold_strict_solve(tmp_path)
         if solved
             mv(tmp_path, output_path; force=true)
+            for stale_tmp in tmp_paths
+                stale_tmp != tmp_path && best_effort_rm(stale_tmp)
+            end
             @info "  ✓ cold-strict solved at $lbl  (obj=$(round(obj, digits=2)))"
             return (level=L, label=lbl, objective=obj, status=term)
         else
+            fallback_tmp = tmp_path
+            fallback_label = lbl
+            fallback_status = term
             @info "    saved but FAILS cold-strict at $lbl: $term"
         end
     end
-    isfile(tmp_path) && rm(tmp_path)
+    if fallback_tmp !== nothing && isfile(fallback_tmp)
+        accepted_tmp = mark_relaxed_handoff!(fallback_tmp, fallback_label, fallback_status)
+        mv(accepted_tmp, output_path; force=true)
+        for stale_tmp in tmp_paths
+            stale_tmp != fallback_tmp && best_effort_rm(stale_tmp)
+        end
+        best_effort_rm(fallback_tmp)
+        @warn "  using relaxed $fallback_label handoff after cold-strict failure: $fallback_status"
+        return (level=-1, label=fallback_label, objective=NaN, status=fallback_status)
+    end
+    for stale_tmp in tmp_paths
+        best_effort_rm(stale_tmp)
+    end
     @warn "  ✗ no level produced a cold-strict solvable JSON"
     return nothing
 end

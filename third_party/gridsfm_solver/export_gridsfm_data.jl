@@ -122,6 +122,16 @@ _is_xfmr(b) = haskey(b,"transformer") ? b["transformer"] :
               (abs(get(b,"tap",1.0)-1.0) > 1e-8 || abs(get(b,"shift",0.0)) > 1e-8)
 
 
+function _source_relaxation(input_path::AbstractString)
+    try
+        raw = JSON3.read(read(input_path, String), Dict{String,Any})
+        return get(raw, "_relaxation", nothing)
+    catch
+        return nothing
+    end
+end
+
+
 # Normalize rate_a/b/c: missing rate_b defaults to rate_a; missing rate_c
 # defaults to rate_b. Mirrors PowerModels' handling.
 function _rates(b)
@@ -423,11 +433,20 @@ with any required relaxation applied.
     @printf("Solve: status=%s  obj=%.2f  elapsed=%.2fs\n", term, obj, elapsed)
 
     opf, feas = build_gridsfm_data(pm, result, net)
+    source_relaxation = _source_relaxation(input_path)
+    relaxed_handoff = source_relaxation isa AbstractDict &&
+                      get(source_relaxation, "handoff_acceptance", nothing) == "relaxed_trial_after_cold_strict_failure"
+    if source_relaxation !== nothing
+        opf["metadata"]["source_relaxation"] = source_relaxation
+    end
+    if !feas && relaxed_handoff
+        opf["metadata"]["handoff_warning"] = "Strict GridSFM export solve did not converge, but source was an explicitly documented relaxed handoff."
+    end
     open(output_path, "w") do io
         JSON3.pretty(io, opf)
     end
     @info "Wrote gridSFM pyg.json to $output_path (feas=$feas)"
-    exit(feas ? 0 : 1)
+    exit((feas || relaxed_handoff) ? 0 : 1)
 end
 
 
