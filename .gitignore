@@ -7,3 +7,4 @@ data/
 *.egg-info/
 frontend/dist/
 frontend/node_modules/
+plans/
