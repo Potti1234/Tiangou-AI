@@ -83,6 +83,18 @@ type TopologyPreview = {
   quality: Record<string, unknown>
   buses: TopologyBus[]
   branches: TopologyBranch[]
+  generators: TopologyGenerator[]
+}
+
+type TopologyGenerator = {
+  id: string
+  bus_id: string
+  name: string | null
+  source: string | null
+  pmax_mw: number | null
+  capacity_tag: string | null
+  provenance: string | null
+  confidence: number | null
 }
 
 type PowerModelsBus = {
@@ -167,6 +179,26 @@ type TopologyDiagnostics = {
   recommended_next_fixes: Array<{ category: string; recommended_action: string; count: number }>
 }
 
+type ReconciliationAsset = {
+  raw_id?: string
+  generator_id?: string
+  name: string | null
+  power: string
+  status: string
+  reason: string
+  parsed_pmax_mw?: number | null
+  mapped_bus_id?: string | null
+  reconstructed_branch_id?: string | null
+  solver_branch_id?: string | null
+}
+
+type AssetReconciliation = {
+  summary: Record<string, unknown>
+  top_generation_assets: ReconciliationAsset[]
+  top_linear_assets: ReconciliationAsset[]
+  top_dropped_or_aggregated_assets: ReconciliationAsset[]
+}
+
 type PipelineSummary = {
   stage_status: Record<string, StageStatus>
   raw_osm_counts_by_power: Record<string, number>
@@ -175,6 +207,7 @@ type PipelineSummary = {
   solver_metadata: Record<string, unknown>
   validation: ValidationPayload
   diagnostics?: TopologyDiagnostics
+  asset_reconciliation?: AssetReconciliation
   handoff_artifacts: Record<string, string>
 }
 
@@ -283,6 +316,10 @@ function isLinearAsset(asset: GridAsset) {
   )
 }
 
+function isGenerationAsset(asset: GridAsset) {
+  return asset.power === "plant" || asset.power === "generator"
+}
+
 function reconstructedRouteStyle(branch: TopologyBranch, retainedInSolver: boolean): Pick<RouteLayer, "color" | "width" | "opacity" | "dashArray"> {
   const synthetic = branch.provenance?.includes("public") || branch.id.startsWith("synthetic:")
   const inferredTransformer = branch.provenance === "inferred_multi_voltage_facility_transformer"
@@ -380,6 +417,46 @@ function CountBadges({ counts }: { counts: Record<string, number> }) {
   )
 }
 
+function statusCounts(source: Record<string, unknown> | undefined, key: string) {
+  const value = source?.[key]
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, number] => typeof entry[1] === "number"),
+  )
+}
+
+function ReconciliationList({ title, items }: { title: string; items: ReconciliationAsset[] }) {
+  if (!items.length) {
+    return (
+      <div>
+        <p className="mb-1 text-[11px] font-medium text-zinc-500">{title}</p>
+        <p className="rounded-[4px] border border-zinc-200 bg-white/70 px-2 py-1.5 text-xs text-zinc-500">No assets reported.</p>
+      </div>
+    )
+  }
+  return (
+    <div>
+      <p className="mb-1 text-[11px] font-medium text-zinc-500">{title}</p>
+      <div className="space-y-1.5">
+        {items.slice(0, 5).map((item) => (
+          <div key={`${item.raw_id ?? item.generator_id ?? item.name}-${item.status}`} className="rounded-[4px] border border-zinc-200 bg-white/75 p-2">
+            <div className="flex items-start justify-between gap-2">
+              <p className="min-w-0 truncate text-[11px] font-semibold text-zinc-950">{item.name ?? item.raw_id ?? item.generator_id}</p>
+              <Badge variant="outline" className="shrink-0 rounded-[3px] border-zinc-300 bg-zinc-50 text-[10px]">
+                {item.status.replaceAll("_", " ")}
+              </Badge>
+            </div>
+            <p className="mt-1 text-xs leading-5 text-zinc-600">{item.reason}</p>
+            {typeof item.parsed_pmax_mw === "number" && (
+              <p className="mt-1 text-[11px] font-medium tabular-nums text-zinc-500">{formatNumber(item.parsed_pmax_mw, 1)} MW candidate capacity</p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function DiagnosticIssueList({ title, items }: { title: string; items: TopologyDiagnosticBranch[] }) {
   if (!items.length) {
     return (
@@ -444,6 +521,31 @@ function PointMarker({ point }: { point: PointLayer }) {
   )
 }
 
+function MapLegend({ mode }: { mode: Mode }) {
+  if (mode !== "reconstructed") return null
+  const entries = [
+    ["#ca8a04", "Raw plant/generator candidate"],
+    ["#111827", "Retained solver generator"],
+    ["#2563eb", "Equivalent capacity source"],
+    ["#15803d", "Branch retained in solver"],
+    ["#71717a", "Branch dropped before solver"],
+    ["#2563eb", "Synthetic/equivalent branch"],
+  ]
+  return (
+    <div className="absolute right-[405px] top-3 z-[2] max-w-[270px] rounded-[6px] border border-zinc-300 bg-[#fbfbfa]/95 p-2 shadow-sm">
+      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Reconstructed legend</p>
+      <div className="space-y-1">
+        {entries.map(([color, label]) => (
+          <div key={label} className="flex items-center gap-2 text-xs text-zinc-700">
+            <span className="size-2.5 rounded-full" style={{ backgroundColor: color }} />
+            <span className="truncate">{label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function MarkerTip({ title, rows }: { title: string; rows: Array<[string, string]> }) {
   return (
     <div className="w-72 rounded-[4px] border border-zinc-300 bg-white/96 p-2.5 text-left shadow-lg">
@@ -495,6 +597,10 @@ function DiagnosticsPanel({
   const topologyDiagnostics = summary?.diagnostics
   const diagnosticSummary = topologyDiagnostics?.summary ?? {}
   const severeVoltageMismatches = (topologyDiagnostics?.voltage_mismatches ?? []).filter((item) => item.severe)
+  const reconciliation = summary?.asset_reconciliation
+  const reconciliationSummary = reconciliation?.summary
+  const linearStatusCounts = statusCounts(reconciliationSummary, "linear_status_counts")
+  const generationStatusCounts = statusCounts(reconciliationSummary, "generation_status_counts")
 
   return (
     <aside className="absolute bottom-3 right-3 top-3 z-[2] flex w-[390px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-[6px] border border-zinc-300 bg-[#fbfbfa]/95 shadow-[0_22px_70px_-42px_rgba(24,24,27,0.75)]">
@@ -534,8 +640,11 @@ function DiagnosticsPanel({
           <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Core metrics</h2>
           <div className="mt-2 rounded-[4px] border border-zinc-200 bg-white/70 px-2">
             <MetadataRow label="Raw assets" value={Object.values(counts).reduce((sum, count) => sum + count, 0)} />
+            <MetadataRow label="Raw lines/cables" value={reconciliationSummary?.raw_linear_count} />
+            <MetadataRow label="Raw plant/generator" value={reconciliationSummary?.raw_generation_count} />
             <MetadataRow label="Preview buses" value={summary?.topology_metadata.bus_count} />
             <MetadataRow label="Preview branches" value={summary?.topology_metadata.branch_count} />
+            <MetadataRow label="Preview generators" value={reconciliationSummary?.preview_generator_count} />
             <MetadataRow label="Solver buses" value={summary?.solver_metadata.bus_count} />
             <MetadataRow label="Solver branches" value={summary?.solver_metadata.branch_count} />
             <MetadataRow label="Loads" value={summary?.solver_metadata.load_count} />
@@ -548,6 +657,22 @@ function DiagnosticsPanel({
             <MetadataRow label="Severe mismatches" value={metric(summary, "severe_branch_voltage_mismatch_count")} />
             <MetadataRow label="Dropped passive buses" value={summary?.solver_metadata.dropped_passive_bus_count} />
             <MetadataRow label="Dropped non-OPF branches" value={summary?.solver_metadata.dropped_non_interfacility_branch_count} />
+          </div>
+        </section>
+
+        <section className="mt-4">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Asset reconciliation</h2>
+          <div className="mt-2 space-y-2">
+            <div>
+              <p className="mb-1 text-[11px] font-medium text-zinc-500">Line and cable status</p>
+              <CountBadges counts={linearStatusCounts} />
+            </div>
+            <div>
+              <p className="mb-1 text-[11px] font-medium text-zinc-500">Plant and generator status</p>
+              <CountBadges counts={generationStatusCounts} />
+            </div>
+            <ReconciliationList title="Top generation candidates" items={reconciliation?.top_generation_assets ?? []} />
+            <ReconciliationList title="Dropped or aggregated assets" items={reconciliation?.top_dropped_or_aggregated_assets ?? []} />
           </div>
         </section>
 
@@ -723,7 +848,7 @@ function App() {
     setError(null)
     try {
       const [assetsResponse, topologyResponse, caseResponse, summaryResponse] = await Promise.all([
-        fetch(`${API_BASE_URL}/grid/assets?region_key=hong-kong&limit=1000`),
+        fetch(`${API_BASE_URL}/grid/assets?region_key=hong-kong&limit=5000`),
         fetch(`${API_BASE_URL}/grid/topology/preview?${query}`),
         fetch(`${API_BASE_URL}/grid/topology/powermodels-preview?${query}`),
         fetch(`${API_BASE_URL}/grid/topology/pipeline-summary?${query}`),
@@ -885,6 +1010,46 @@ function App() {
     if (mode === "raw") return []
     const points: PointLayer[] = []
 
+    if (mode === "reconstructed") {
+      for (const bus of topology?.buses ?? []) {
+        if (bus.lat === null || bus.lon === null) continue
+        points.push({
+          id: `preview-bus-${bus.id}`,
+          label: bus.name ?? bus.id,
+          longitude: bus.lon,
+          latitude: bus.lat,
+          color: "#52525b",
+          size: bus.provenance?.startsWith("synthetic") ? 8 : 10,
+          icon: CircleDot,
+          meta: [
+            ["Layer", "Preview bus"],
+            ["Voltage", bus.base_kv ? `${formatNumber(bus.base_kv, 1)} kV` : "n/a"],
+            ["Power", styleFor(bus.power).label],
+          ],
+        })
+      }
+
+      for (const asset of assetsWithLocation.filter(isGenerationAsset)) {
+        if (asset.lat === null || asset.lon === null) continue
+        const outputTag = asset.tags["generator:output:electricity"] ?? asset.tags["plant:output:electricity"] ?? asset.tags["output:electricity"] ?? "n/a"
+        points.push({
+          id: `raw-generation-${assetKey(asset)}`,
+          label: assetTitle(asset),
+          longitude: asset.lon,
+          latitude: asset.lat,
+          color: asset.power === "plant" ? "#ca8a04" : "#eab308",
+          size: asset.power === "plant" ? 22 : 18,
+          icon: asset.power === "plant" ? Factory : Zap,
+          meta: [
+            ["Layer", "Raw generation candidate"],
+            ["Type", styleFor(asset.power).label],
+            ["Output", outputTag],
+            ["Operator", asset.operator ?? "n/a"],
+          ],
+        })
+      }
+    }
+
     for (const [id, load] of Object.entries(caseData?.load ?? {})) {
       const bus = caseBusByNumber.get(load.load_bus)
       const coord = coordinateForBus(bus?.source_id)
@@ -919,14 +1084,14 @@ function App() {
         label: gen.resource_type,
         longitude: coord[0],
         latitude: coord[1],
-        color: gen.resource_type.includes("equivalent") ? "#2563eb" : "#ca8a04",
+        color: gen.resource_type.includes("equivalent") ? "#2563eb" : "#111827",
         size: Math.max(16, Math.min(40, 12 + Math.sqrt(pmaxMw) / 2)),
         icon: gen.resource_type.includes("equivalent") ? Database : Factory,
-        meta: [["Pmax MW", formatNumber(pmaxMw, 1)], ["Bus", String(gen.gen_bus)]],
+        meta: [["Layer", "Solver generator"], ["Pmax MW", formatNumber(pmaxMw, 1)], ["Bus", String(gen.gen_bus)]],
       })
     }
     return points
-  }, [caseBusByNumber, caseData, mode])
+  }, [assetsWithLocation, caseBusByNumber, caseData, mode, topology])
 
   const pointAssets = useMemo(
     () => assetsWithLocation.filter((asset) => !isLinearAsset(asset)),
@@ -996,6 +1161,8 @@ function App() {
               </MapMarker>
             ))}
         </Map>
+
+        <MapLegend mode={mode} />
 
         <header className="absolute left-3 top-3 z-[2] max-w-[calc(100vw-420px-2rem)] rounded-[6px] border border-zinc-300 bg-[#fbfbfa]/95 p-3 shadow-sm">
           <div className="flex flex-wrap items-center gap-2">
