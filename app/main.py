@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.assumptions.contingencies import contingency_assumption_tables
 from app.assumptions.data_centers import data_center_assumption_tables
+from app.assumptions.demand_profiles import demand_profile_assumption_tables
 from app.assumptions.generators import generator_assumption_tables
 from app.assumptions.imports import import_assumption_tables
 from app.assumptions.lines import line_assumption_tables
@@ -373,6 +374,11 @@ def assumptions_transformers() -> list[dict[str, Any]]:
 @app.get("/assumptions/data-centers")
 def assumptions_data_centers() -> list[dict[str, Any]]:
     return data_center_assumption_tables()
+
+
+@app.get("/assumptions/demand-profiles")
+def assumptions_demand_profiles() -> list[dict[str, Any]]:
+    return demand_profile_assumption_tables()
 
 
 @app.get("/assumptions/generators")

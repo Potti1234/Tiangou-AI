@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app import main
+from app.assumptions.demand_profiles import demand_profile_for_sector, hourly_load_metadata, hourly_profile_summary
 from app.assumptions.lines import branch_parameter_defaults
 from app.assumptions.provenance import ASSUMPTION_TABLES, REQUIRED_PROVENANCE_COLUMNS, read_table_rows
 from app.assumptions.transformers import transformer_parameter_defaults
@@ -23,15 +24,17 @@ def test_assumption_csvs_have_required_provenance_columns() -> None:
     assert row_counts["overhead_line_impedance_defaults"] > 0
     assert row_counts["transformer_capacity_defaults"] > 0
     assert row_counts["transformer_tap_defaults"] > 0
+    assert row_counts["hong_kong_sector_hourly_profiles"] == 120
+    assert row_counts["weather_sensitivity_profiles"] == 10
 
 
-def test_assumption_validation_summary_reports_line_enrichment_and_remaining_empty_tables() -> None:
+def test_assumption_validation_summary_reports_enrichment_and_remaining_empty_tables() -> None:
     payload = build_assumption_validation_summary()
 
     assert payload["schema"] == "tiangou.assumptions.validation_summary.v1"
     assert payload["status"] == "warning"
     assert payload["table_count"] == 12
-    assert payload["row_count"] == 46
+    assert payload["row_count"] == 176
     assert payload["errors"] == []
     assert {warning["code"] for warning in payload["warnings"]} == {"empty_table"}
     assert set(payload["provenance_classes"]) == {
@@ -40,7 +43,7 @@ def test_assumption_validation_summary_reports_line_enrichment_and_remaining_emp
         "synthetic_engineering_default",
     }
     assert all(table["status"] == "ok" for table in payload["tables"])
-    assert payload["provenance_counts"] == {"synthetic_engineering_default": 46}
+    assert payload["provenance_counts"] == {"synthetic_engineering_default": 176}
 
 
 def test_line_assumption_lookup_scales_rating_and_exposes_provenance() -> None:
@@ -74,12 +77,28 @@ def test_transformer_assumption_lookup_exposes_capacity_tap_and_provenance() -> 
     ]
 
 
+def test_demand_profile_lookup_normalizes_hourly_shape_and_exposes_provenance() -> None:
+    profile = demand_profile_for_sector("residential")
+    metadata = hourly_load_metadata("residential", peak_pd_mw=100.0, fallback_pd_mw=60.0)
+    summary = hourly_profile_summary()
+
+    assert len(profile["shares"]) == 24
+    assert round(sum(profile["shares"]), 6) == 1.0
+    assert metadata["load_profile_id"] == "hk_residential_synthetic"
+    assert metadata["profile_provenance"] == "synthetic_engineering_default"
+    assert len(metadata["hourly_pd_mw"]) == 24
+    assert max(metadata["hourly_pd_mw"]) == 100.0
+    assert metadata["peak_hour"] == 18
+    assert summary["commercial"]["share_sum"] == 1.0
+
+
 def test_assumption_api_summary_and_drilldowns() -> None:
     with TestClient(main.app) as client:
         summary_response = client.get("/assumptions/summary")
         lines_response = client.get("/assumptions/lines")
         transformers_response = client.get("/assumptions/transformers")
         data_centers_response = client.get("/assumptions/data-centers")
+        demand_profiles_response = client.get("/assumptions/demand-profiles")
         generators_response = client.get("/assumptions/generators")
         contingencies_response = client.get("/assumptions/contingencies")
         imports_response = client.get("/assumptions/imports")
@@ -88,6 +107,7 @@ def test_assumption_api_summary_and_drilldowns() -> None:
     assert lines_response.status_code == 200
     assert transformers_response.status_code == 200
     assert data_centers_response.status_code == 200
+    assert demand_profiles_response.status_code == 200
     assert generators_response.status_code == 200
     assert contingencies_response.status_code == 200
     assert imports_response.status_code == 200
@@ -95,7 +115,7 @@ def test_assumption_api_summary_and_drilldowns() -> None:
     summary_payload = summary_response.json()
     assert summary_payload["table_count"] == 12
     assert summary_payload["status"] == "warning"
-    assert summary_payload["row_count"] == 46
+    assert summary_payload["row_count"] == 176
     assert {table["key"] for table in lines_response.json()} == {
         "line_thermal_rating_defaults",
         "cable_impedance_defaults",
@@ -103,6 +123,10 @@ def test_assumption_api_summary_and_drilldowns() -> None:
     }
     assert transformers_response.json()[0]["category"] == "transformers"
     assert data_centers_response.json()[0]["key"] == "data_center_site_assumptions"
+    assert {table["key"] for table in demand_profiles_response.json()} == {
+        "hong_kong_sector_hourly_profiles",
+        "weather_sensitivity_profiles",
+    }
     assert len(generators_response.json()) == 2
     assert contingencies_response.json()[0]["key"] == "synthetic_contingency_library"
     assert imports_response.json()[0]["key"] == "cross_border_import_limits"

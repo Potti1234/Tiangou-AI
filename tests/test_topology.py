@@ -108,6 +108,11 @@ def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
     clp_by_bus_sector = {(load["bus_id"], load["sector"]): load for load in clp_loads}
     assert clp_by_bus_sector[("osm:node:1", "residential")]["source_energy_gwh"] == 5947.234
     assert clp_by_bus_sector[("osm:node:1", "residential")]["pd_mw"] == 1327.642
+    residential_load = clp_by_bus_sector[("osm:node:1", "residential")]
+    assert residential_load["load_profile_id"] == "hk_residential_synthetic"
+    assert residential_load["profile_provenance"] == "synthetic_engineering_default"
+    assert len(residential_load["hourly_pd_mw"]) == 24
+    assert residential_load["peak_hour"] == 18
     assert preview["metadata"]["load_allocation_validation"]["proxy_allocation_share"] == 0.0
 
 
@@ -522,6 +527,7 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert case["_metadata"]["parameter_lookup_tables"]["overhead_line_voltage_kv"] == [33.0, 110.0, 132.0, 220.0, 275.0, 400.0]
     assert case["_metadata"]["parameter_lookup_tables"]["underground_cable_voltage_kv"] == [33.0, 110.0, 132.0, 220.0, 275.0, 400.0]
     assert case["_metadata"]["parameter_lookup_tables"]["load_power_factor"] == 0.95
+    assert case["_metadata"]["parameter_lookup_tables"]["hourly_demand_profiles"]["residential"]["profile_id"] == "hk_residential_synthetic"
     assert case["_metadata"]["calibration"]["snapshot_total_mw"]["peak_16h"] == 2106.448
     assert case["_metadata"]["calibration"]["clp_snapshot_total_mw"]["peak_16h"] == 7385.731
     assert {load["provenance"] for load in case["load"].values()} == {
@@ -529,6 +535,10 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
         "inferred_clp_substation_allocated",
     }
     assert all(load["allocation_method"] for load in case["load"].values())
+    exported_residential = next(load for load in case["load"].values() if load.get("sector") == "residential")
+    assert exported_residential["load_profile_id"] == "hk_residential_synthetic"
+    assert len(exported_residential["hourly_pd_mw"]) == 24
+    assert exported_residential["profile_provenance"] == "synthetic_engineering_default"
     assert case["_metadata"]["provenance_summary"]["branch"] == {"osm_with_inferred_parameters": 1}
     assert case["_metadata"]["provenance_summary"]["gen"] == {"public_peak_demand_capacity_equivalent": 2}
     assert case["_metadata"]["provenance_summary"]["load"] == {

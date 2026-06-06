@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.assumptions.lines import branch_parameter_defaults, line_lookup_voltage_metadata
+from app.assumptions.demand_profiles import hourly_load_metadata, hourly_profile_summary
 from app.assumptions.transformers import transformer_lookup_metadata, transformer_parameter_defaults
 from app.data_sources import CalibrationBundle, load_calibration_bundle
 
@@ -990,6 +991,18 @@ def topology_preview_to_powermodels(
             "proxy_total_weight": load.get("proxy_total_weight"),
             "proxy_assignment_distance_avg_km": load.get("proxy_assignment_distance_avg_km"),
             "proxy_assignment_distance_median_km": load.get("proxy_assignment_distance_median_km"),
+            "hourly_pd_mw": load.get("hourly_pd_mw"),
+            "peak_hour": load.get("peak_hour"),
+            "load_profile_id": load.get("load_profile_id"),
+            "profile_sector": load.get("profile_sector"),
+            "profile_provenance": load.get("profile_provenance"),
+            "profile_confidence": load.get("profile_confidence"),
+            "profile_method": load.get("profile_method"),
+            "profile_source": load.get("profile_source"),
+            "profile_assumptions": load.get("profile_assumptions"),
+            "weekday_factor": load.get("weekday_factor"),
+            "weekend_factor": load.get("weekend_factor"),
+            "cooling_sensitivity": load.get("cooling_sensitivity"),
         }
 
     gen_dict = {}
@@ -3243,7 +3256,7 @@ def _allocate_loads(
     else:
         loads.extend(_allocate_synthetic_clp_loads(buses, demand_snapshot=demand_snapshot))
     if loads:
-        return loads
+        return _attach_hourly_load_profiles(loads)
     load_factor = snapshot["load_factor"]
     fallback_peak_mw = SYNTHETIC_CLP_PEAK_DEMAND_MW
     for territory, peak_mw in {"clp": fallback_peak_mw}.items():
@@ -3280,7 +3293,19 @@ def _allocate_loads(
                     "confidence": 0.2,
                 }
             )
-    return loads
+    return _attach_hourly_load_profiles(loads)
+
+
+def _attach_hourly_load_profiles(loads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    enriched = []
+    for load in loads:
+        profile_fields = hourly_load_metadata(
+            str(load.get("sector") or "commercial"),
+            load.get("peak_pd_mw"),
+            float(load.get("pd_mw") or 0.0),
+        )
+        enriched.append({**load, **profile_fields})
+    return enriched
 
 
 def _proxy_allocated_sector_loads(
@@ -3838,6 +3863,7 @@ def _parameter_lookup_metadata() -> dict[str, Any]:
     return {
         **line_lookup_voltage_metadata(),
         **transformer_lookup_metadata(),
+        "hourly_demand_profiles": hourly_profile_summary(),
         "generator_fuel_defaults": sorted(GENERATOR_FUEL_DEFAULTS),
         "equivalent_generator_defaults": sorted(EQUIVALENT_GENERATOR_DEFAULTS),
         "load_power_factor": LOAD_DEFAULTS["power_factor"],

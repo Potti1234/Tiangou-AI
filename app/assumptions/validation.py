@@ -83,6 +83,19 @@ def build_assumption_validation_summary() -> dict[str, Any]:
         provenance_counts = summarize_by_provenance(rows)
         if not rows:
             warnings.append(_warning("empty_table", table.key, "Assumption table schema is present but has no enrichment rows yet."))
+        if table.key == "hong_kong_sector_hourly_profiles" and rows:
+            grouped: dict[str, list[dict[str, str]]] = {}
+            for row in rows:
+                grouped.setdefault(str(row.get("sector") or ""), []).append(row)
+            for sector, sector_rows in grouped.items():
+                hours = sorted(int(row["hour"]) for row in sector_rows if str(row.get("hour") or "").isdigit())
+                if hours != list(range(24)):
+                    errors.append(_warning("hourly_profile_incomplete", table.key, f"Sector {sector} must have hours 0-23"))
+                    table_status = "error"
+                share_sum = sum(float(row.get("base_share") or 0.0) for row in sector_rows)
+                if abs(share_sum - 1.0) > 0.01:
+                    errors.append(_warning("hourly_profile_not_normalized", table.key, f"Sector {sector} base_share sums to {share_sum:.6f}"))
+                    table_status = "error"
         for provenance, count in provenance_counts.items():
             aggregate_provenance_counts[provenance] = aggregate_provenance_counts.get(provenance, 0) + count
         total_rows += len(rows)
