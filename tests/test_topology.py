@@ -105,6 +105,26 @@ def test_powermodels_preview_exports_overnight_snapshot() -> None:
     )
 
 
+def test_powermodels_preview_exports_shoulder_and_cooling_snapshots() -> None:
+    shoulder_case = build_powermodels_preview(
+        _sample_rows(),
+        snap_tolerance_km=0.2,
+        demand_snapshot="shoulder_10h",
+    )
+    cooling_case = build_powermodels_preview(
+        _sample_rows(),
+        snap_tolerance_km=0.2,
+        demand_snapshot="cooling_peak_18h",
+    )
+
+    assert shoulder_case["demand_snapshot"] == "shoulder_10h"
+    assert shoulder_case["_metadata"]["load_factor"] == 0.75
+    assert shoulder_case["_metadata"]["total_pd_mw"] == 7193.25
+    assert cooling_case["demand_snapshot"] == "cooling_peak_18h"
+    assert cooling_case["_metadata"]["load_factor"] == 1.12
+    assert cooling_case["_metadata"]["total_pd_mw"] == 10741.92
+
+
 def test_topology_preview_can_filter_known_low_voltage_assets() -> None:
     rows = [
         *_sample_rows(),

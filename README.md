@@ -84,6 +84,12 @@ For a transmission-level handoff, drop known lower-voltage distribution assets b
 python -m app.export_powermodels data/processed/hong_kong_16h_model.json --min-voltage-kv 100
 ```
 
+Export an additional representative snapshot such as shoulder demand or high-temperature cooling stress:
+
+```powershell
+python -m app.export_powermodels data/processed/hong_kong_18h_cooling_model.json --demand-snapshot cooling_peak_18h
+```
+
 Add the public 720 MVA CLP-HK Electric interconnection when building an optimization case:
 
 ```powershell
@@ -106,6 +112,12 @@ Write a Phase 1 stress bundle with multiple CLP-HK Electric intertie transfer li
 
 ```powershell
 python -m app.export_powermodels data/processed --hong-kong-phase1-bundle --include-hk-interties --intertie-derate-scenarios 1.0,0.75,0.5 --n-per-mode 3
+```
+
+Include additional demand snapshots in a bundle when you want load-stress cases:
+
+```powershell
+python -m app.export_powermodels data/processed --hong-kong-phase1-bundle --bundle-demand-snapshots peak_16h,overnight_04h,shoulder_10h,cooling_peak_18h
 ```
 
 The bundle also writes `run_hong_kong_solver_pipeline.ps1` and `grids_solvable.txt` for the downstream Julia solve/export/base-verify/scenario steps. The script preflights a runnable `julia` command and the expected solver scripts before running. Pass the cloned solver path when running it if needed:

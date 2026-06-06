@@ -103,6 +103,10 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
             "/grid/topology/powermodels-preview",
             params={"demand_snapshot": "overnight_04h"},
         )
+        cooling_response = client.get(
+            "/grid/topology/powermodels-preview",
+            params={"demand_snapshot": "cooling_peak_18h"},
+        )
         filtered_response = client.get(
             "/grid/topology/powermodels-preview",
             params={"min_voltage_kv": 100.0},
@@ -116,6 +120,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert ingest_response.status_code == 200
     assert preview_response.status_code == 200
     assert overnight_response.status_code == 200
+    assert cooling_response.status_code == 200
     assert filtered_response.status_code == 200
     assert intertie_validation_response.status_code == 200
     assert validation_response.status_code == 200
@@ -125,6 +130,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert payload["_metadata"]["load_count"] == 2
     assert payload["_metadata"]["gen_count"] == 1
     assert overnight_response.json()["_metadata"]["total_pd_mw"] == 4034.8
+    assert cooling_response.json()["_metadata"]["total_pd_mw"] == 8216.32
     assert filtered_response.json()["_metadata"]["min_voltage_kv"] == 100.0
     assert intertie_validation_response.json()["metrics"]["island_count"] == 1
     validation_payload = validation_response.json()

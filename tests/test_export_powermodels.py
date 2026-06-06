@@ -92,6 +92,7 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert result["include_hk_interties"] is True
     assert result["hk_intertie_derate"] == 0.5
     assert result["intertie_derate_scenarios"] == [0.5]
+    assert result["demand_snapshots"] == ["peak_16h", "overnight_04h"]
     assert result["n_per_mode"] == 3
     assert len(result["exports"]) == 2
 
@@ -165,6 +166,31 @@ def test_export_hong_kong_phase1_bundle_writes_intertie_derate_stress_cases(tmp_
     ]
 
 
+def test_export_hong_kong_phase1_bundle_can_select_demand_snapshots(tmp_path) -> None:
+    db_path = tmp_path / "grid.sqlite3"
+    output_dir = tmp_path / "processed"
+    _seed_grid(db_path)
+
+    result = export_hong_kong_phase1_bundle(
+        database_path=db_path,
+        output_dir=output_dir,
+        snap_tolerance_km=0.2,
+        demand_snapshots=("peak_16h", "shoulder_10h", "cooling_peak_18h"),
+        allow_validation_errors=False,
+    )
+
+    expected_files = [
+        output_dir / "hong_kong_16h_model.json",
+        output_dir / "hong_kong_10h_shoulder_model.json",
+        output_dir / "hong_kong_18h_cooling_model.json",
+    ]
+    assert [Path(export["output_path"]) for export in result["exports"]] == expected_files
+    assert result["demand_snapshots"] == ["peak_16h", "shoulder_10h", "cooling_peak_18h"]
+    cooling_case = json.loads(expected_files[2].read_text(encoding="utf-8"))
+    assert cooling_case["demand_snapshot"] == "cooling_peak_18h"
+    assert cooling_case["_metadata"]["total_pd_mw"] == 8216.32
+
+
 def test_export_hong_kong_phase1_bundle_rejects_invalid_scenario_count(tmp_path) -> None:
     db_path = tmp_path / "grid.sqlite3"
     init_db(db_path)
@@ -187,6 +213,19 @@ def test_export_hong_kong_phase1_bundle_rejects_invalid_intertie_derate_scenario
             database_path=db_path,
             output_dir=tmp_path / "processed",
             intertie_derate_scenarios=(1.0, 0.0),
+            allow_validation_errors=True,
+        )
+
+
+def test_export_hong_kong_phase1_bundle_rejects_invalid_demand_snapshot(tmp_path) -> None:
+    db_path = tmp_path / "grid.sqlite3"
+    init_db(db_path)
+
+    with pytest.raises(ValueError, match="Unknown bundle demand snapshot"):
+        export_hong_kong_phase1_bundle(
+            database_path=db_path,
+            output_dir=tmp_path / "processed",
+            demand_snapshots=("peak_16h", "bad"),
             allow_validation_errors=True,
         )
 

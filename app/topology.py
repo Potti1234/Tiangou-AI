@@ -36,6 +36,14 @@ DEMAND_SNAPSHOTS = {
         "label": "Hong Kong 2024 overnight low-load, 04h representative snapshot",
         "load_factor": 0.55,
     },
+    "shoulder_10h": {
+        "label": "Hong Kong 2024 shoulder-demand, 10h representative snapshot",
+        "load_factor": 0.75,
+    },
+    "cooling_peak_18h": {
+        "label": "Hong Kong high-temperature cooling stress, 18h representative snapshot",
+        "load_factor": 1.12,
+    },
 }
 BASE_MVA = 100.0
 

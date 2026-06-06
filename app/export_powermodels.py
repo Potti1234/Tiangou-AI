@@ -12,6 +12,12 @@ DEMAND_SNAPSHOT_EXPORTS = (
     ("peak_16h", "16h"),
     ("overnight_04h", "04h"),
 )
+DEMAND_SNAPSHOT_LABELS = {
+    "peak_16h": "16h",
+    "overnight_04h": "04h",
+    "shoulder_10h": "10h_shoulder",
+    "cooling_peak_18h": "18h_cooling",
+}
 
 
 def export_powermodels_case(
@@ -64,6 +70,7 @@ def export_hong_kong_phase1_bundle(
     include_hk_interties: bool = False,
     hk_intertie_derate: float = 1.0,
     intertie_derate_scenarios: tuple[float, ...] | None = None,
+    demand_snapshots: tuple[str, ...] | None = None,
     min_voltage_kv: float | None = None,
     n_per_mode: int = 1,
     allow_validation_errors: bool = False,
@@ -74,15 +81,18 @@ def export_hong_kong_phase1_bundle(
     derate_scenarios = intertie_derate_scenarios or (hk_intertie_derate,)
     for derate in derate_scenarios:
         _validate_derate_scenario(derate)
+    bundle_snapshots = demand_snapshots or tuple(snapshot for snapshot, _ in DEMAND_SNAPSHOT_EXPORTS)
+    for demand_snapshot in bundle_snapshots:
+        _validate_bundle_snapshot(demand_snapshot)
 
     exports = []
     multi_derate = len(derate_scenarios) > 1
     for derate in derate_scenarios:
-        for demand_snapshot, hour_label in DEMAND_SNAPSHOT_EXPORTS:
+        for demand_snapshot in bundle_snapshots:
             exports.append(
                 export_powermodels_case(
                     database_path=database_path,
-                    output_path=output_dir / _bundle_filename(hour_label, derate, multi_derate=multi_derate),
+                    output_path=output_dir / _bundle_filename(DEMAND_SNAPSHOT_LABELS[demand_snapshot], derate, multi_derate=multi_derate),
                     region_key="hong-kong",
                     snap_tolerance_km=snap_tolerance_km,
                     demand_snapshot=demand_snapshot,
@@ -98,6 +108,7 @@ def export_hong_kong_phase1_bundle(
         "include_hk_interties": include_hk_interties,
         "hk_intertie_derate": hk_intertie_derate,
         "intertie_derate_scenarios": list(derate_scenarios),
+        "demand_snapshots": list(bundle_snapshots),
         "min_voltage_kv": min_voltage_kv,
         "n_per_mode": n_per_mode,
         "exports": exports,
@@ -121,6 +132,12 @@ def _derate_label(derate: float) -> str:
 def _validate_derate_scenario(derate: float) -> None:
     if derate <= 0 or derate > 1:
         raise ValueError("Intertie derate scenarios must be greater than 0 and less than or equal to 1.")
+
+
+def _validate_bundle_snapshot(demand_snapshot: str) -> None:
+    if demand_snapshot not in DEMAND_SNAPSHOT_LABELS:
+        known = ", ".join(sorted(DEMAND_SNAPSHOT_LABELS))
+        raise ValueError(f"Unknown bundle demand snapshot '{demand_snapshot}'. Known snapshots: {known}")
 
 
 def _write_solver_handoff(
@@ -223,6 +240,11 @@ def main() -> None:
         type=_parse_derate_scenarios,
         help="Comma-separated intertie derates for --hong-kong-phase1-bundle, for example 1.0,0.75,0.5.",
     )
+    parser.add_argument(
+        "--bundle-demand-snapshots",
+        type=_parse_bundle_snapshots,
+        help="Comma-separated demand snapshots for --hong-kong-phase1-bundle, for example peak_16h,overnight_04h,cooling_peak_18h.",
+    )
     parser.add_argument("--n-per-mode", type=int, default=1)
     parser.add_argument(
         "--include-hk-interties",
@@ -249,6 +271,7 @@ def main() -> None:
             include_hk_interties=args.include_hk_interties,
             hk_intertie_derate=args.hk_intertie_derate,
             intertie_derate_scenarios=args.intertie_derate_scenarios,
+            demand_snapshots=args.bundle_demand_snapshots,
             min_voltage_kv=args.min_voltage_kv,
             n_per_mode=args.n_per_mode,
             allow_validation_errors=args.allow_validation_errors,
@@ -281,6 +304,18 @@ def _parse_derate_scenarios(raw: str) -> tuple[float, ...]:
     except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from exc
     return derates
+
+
+def _parse_bundle_snapshots(raw: str) -> tuple[str, ...]:
+    snapshots = tuple(token.strip() for token in raw.split(",") if token.strip())
+    if not snapshots:
+        raise argparse.ArgumentTypeError("Provide at least one bundle demand snapshot.")
+    try:
+        for demand_snapshot in snapshots:
+            _validate_bundle_snapshot(demand_snapshot)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return snapshots
 
 
 if __name__ == "__main__":

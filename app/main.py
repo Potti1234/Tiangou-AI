@@ -19,10 +19,14 @@ from app.repository import (
     upsert_elements,
 )
 from app.topology import (
+    DEMAND_SNAPSHOTS,
     build_powermodels_preview,
     build_powermodels_validation,
     build_topology_preview,
 )
+
+
+DEMAND_SNAPSHOT_PATTERN = f"^({'|'.join(sorted(DEMAND_SNAPSHOTS))})$"
 
 
 @asynccontextmanager
@@ -175,7 +179,7 @@ def grid_summary() -> list[dict[str, Any]]:
 def topology_preview(
     region_key: str = "hong-kong",
     snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
-    demand_snapshot: str = Query(default="peak_16h", pattern="^(peak_16h|overnight_04h)$"),
+    demand_snapshot: str = Query(default="peak_16h", pattern=DEMAND_SNAPSHOT_PATTERN),
     include_hk_interties: bool = False,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
     min_voltage_kv: float | None = Query(default=None, gt=0.0),
@@ -205,7 +209,7 @@ def topology_preview(
 def powermodels_preview(
     region_key: str = "hong-kong",
     snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
-    demand_snapshot: str = Query(default="peak_16h", pattern="^(peak_16h|overnight_04h)$"),
+    demand_snapshot: str = Query(default="peak_16h", pattern=DEMAND_SNAPSHOT_PATTERN),
     include_hk_interties: bool = False,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
     min_voltage_kv: float | None = Query(default=None, gt=0.0),
@@ -235,7 +239,7 @@ def powermodels_preview(
 def topology_validation(
     region_key: str = "hong-kong",
     snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
-    demand_snapshot: str = Query(default="peak_16h", pattern="^(peak_16h|overnight_04h)$"),
+    demand_snapshot: str = Query(default="peak_16h", pattern=DEMAND_SNAPSHOT_PATTERN),
     include_hk_interties: bool = False,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
     min_voltage_kv: float | None = Query(default=None, gt=0.0),
