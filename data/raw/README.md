@@ -25,15 +25,31 @@ This folder contains curated public source datasets used to calibrate the Hong K
 - Public source page: https://data.gov.hk/en-data/dataset/hk-emsd-emsd1-energy-end-use-data-2025
 - Use in model: sector/end-use calibration, especially air-conditioning and commercial load-shape assumptions.
 
+### `emsd/electricity_consumption_by_sector_table08.csv`
+
+- Source: EMSD Hong Kong Energy End-use Data / data.gov.hk
+- Dataset table: Hong Kong Energy End-use Data 2025 Table 08, Sector > Electricity Consumption by Sector
+- Public source page: https://data.gov.hk/en-data/dataset/hk-emsd-emsd1-energy-end-use-data-2025/resource/4fb8c1ae-cdb0-4d4e-8d44-9b105f031747
+- Use in model: official territory-wide electricity consumption by residential, commercial, industrial, and transport sectors.
+- Intended calibration role: infer CLP/service-territory demand by subtracting observed HK Electric sector consumption from official Hong Kong totals.
+
+### `census_statistics/monthly_electricity_gas_by_user_type_915_91201.csv`
+
+- Source: Census and Statistics Department, Hong Kong Monthly Digest of Statistics / web table
+- Dataset table: Table 915-91201, Monthly statistics on consumption of electricity and gas by type of users
+- Public source page: https://www.censtatd.gov.hk/en/web_table.html?id=915-91201
+- Use in model: monthly and annual territory-wide validation for electricity consumption by domestic, commercial, industrial, street lighting, and all groups.
+- Intended calibration role: validate total modeled Hong Kong electricity demand and seasonal/monthly load-shape assumptions.
+
 ## Expected Additional Sources
 
 ### `clp/`
 
-Place CLP public consumption, network, or open-data exports here. CLP data is needed for Kowloon, New Territories, and many outlying islands.
+Place CLP public consumption, network, or open-data exports here if available. Until direct CLP consumption data is available, CLP-side demand should be inferred from official territory-wide totals minus observed HK Electric demand.
 
 ### `census_statistics/`
 
-Place Census and Statistics Department Hong Kong Energy Statistics tables here. These are useful for territory-level monthly/annual validation.
+Additional Census and Statistics Department Hong Kong Energy Statistics tables can be placed here. The current table is useful for territory-level monthly/annual validation.
 
 ### `osm/`
 
