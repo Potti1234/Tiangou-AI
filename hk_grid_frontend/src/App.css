@@ -1,0 +1,71 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--bg-deep);
+}
+
+/* ── split view ─────────────────────────────────── */
+.split-view {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  gap: 0;
+}
+
+.divider {
+  width: 2px;
+  background: linear-gradient(to bottom,
+    transparent 0%,
+    var(--border2) 20%,
+    var(--border2) 80%,
+    transparent 100%
+  );
+  flex-shrink: 0;
+}
+
+/* ── loading ────────────────────────────────────── */
+.loading-overlay {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  color: var(--text-secondary);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border2);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── error ──────────────────────────────────────── */
+.error-banner {
+  background: var(--red-dim);
+  border-bottom: 1px solid var(--red);
+  color: var(--red-text);
+  padding: 10px 20px;
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ── empty ──────────────────────────────────────── */
+.empty-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 15px;
+}

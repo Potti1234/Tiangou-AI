@@ -1,0 +1,274 @@
+.grid-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 12px 14px 10px;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* ── panel header ─────────────────────────────── */
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 2px;
+}
+
+.panel-badge {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  padding: 3px 10px;
+  border-radius: 4px;
+}
+.panel-badge--before {
+  background: var(--red-dim);
+  color: var(--red-text);
+  border: 1px solid rgba(231,76,60,0.3);
+}
+.panel-badge--after {
+  background: var(--green-dim);
+  color: var(--green-text);
+  border: 1px solid rgba(0,229,160,0.25);
+}
+
+.panel-label {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-primary);
+}
+.panel-sublabel {
+  font-size: 11px;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+  margin-top: 1px;
+}
+
+/* ── stat row ─────────────────────────────────── */
+.stat-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.stat-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px 8px;
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card--status { text-align: center; }
+
+.stat-name {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.stat-value {
+  font-family: var(--mono);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+.stat-unit { font-size: 13px; font-weight: 400; opacity: 0.7; }
+
+.stat-red    { color: var(--red); text-shadow: 0 0 16px var(--red-glow); }
+.stat-amber  { color: var(--amber); }
+.stat-green  { color: var(--green); text-shadow: 0 0 14px var(--green-glow); }
+.stat-white  { color: var(--text-primary); }
+
+.status-text {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin: 4px 0 2px;
+}
+.status-icon { font-size: 20px; opacity: 0.7; }
+
+.status-critical { color: var(--red) !important; border-color: rgba(231,76,60,0.4) !important; }
+.status-alert    { color: var(--amber) !important; }
+.status-watch    { color: #f1c40f !important; }
+.status-normal   { color: var(--text-secondary) !important; }
+.status-stable   { color: var(--green) !important; border-color: rgba(0,229,160,0.35) !important; }
+
+.stat-trend {
+  font-size: 22px;
+  font-weight: 700;
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0.5;
+}
+.trend-up   { color: var(--red); }
+.trend-down { color: var(--green); }
+
+/* frequency bar */
+.freq-sparkline { margin-top: 6px; }
+.sparkline-bar {
+  height: 3px;
+  background: var(--border2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.sparkline-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease, background 0.4s ease;
+}
+
+/* ── alert banners ────────────────────────────── */
+.alert-banner, .action-banner {
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.alert-icon, .action-icon { font-size: 14px; flex-shrink: 0; }
+
+.alert-banner--blackout {
+  background: rgba(120,0,0,0.25);
+  border: 1px solid rgba(231,40,40,0.55);
+  color: #ff6b6b;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.alert-banner--critical {
+  background: rgba(231,76,60,0.13);
+  border: 1px solid rgba(231,76,60,0.3);
+  color: #ff8a7a;
+}
+.alert-banner--warn {
+  background: rgba(243,156,18,0.1);
+  border: 1px solid rgba(243,156,18,0.3);
+  color: var(--amber);
+}
+.alert-banner--stable {
+  background: rgba(0,229,160,0.08);
+  border: 1px solid rgba(0,229,160,0.25);
+  color: var(--green);
+}
+.action-log {
+  background: rgba(52,152,219,0.07);
+  border: 1px solid rgba(52,152,219,0.25);
+  border-radius: 6px;
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 110px;
+  overflow-y: auto;
+}
+.action-log-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.action-log-time {
+  color: rgba(96,184,232,0.55);
+  font-family: var(--mono);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.action-log-text {
+  color: #60b8e8;
+}
+
+/* ── map ──────────────────────────────────────── */
+.map-container {
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ── bottom section ───────────────────────────── */
+.panel-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* freq chart */
+.freq-chart-wrap { }
+.section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+.section-subtitle { font-weight: 400; opacity: 0.7; }
+
+/* kpi boxes */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+.kpi-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 8px;
+  text-align: center;
+  border-color: rgba(0,229,160,0.2);
+  background: rgba(0,229,160,0.05);
+}
+.kpi-icon  { font-size: 18px; margin-bottom: 4px; }
+.kpi-value { font-size: 20px; font-weight: 800; color: var(--kpi-color); font-family: var(--mono); }
+.kpi-label { font-size: 10px; letter-spacing: 0.1em; color: var(--text-secondary); margin-top: 2px; }
+
+
+/* physics readouts */
+.physics-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.phys-item {
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 64px;
+  flex: 1;
+}
+.phys-label {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+.phys-value {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 2px;
+}
+.phys-unit { font-size: 9px; font-weight: 400; opacity: 0.6; }
+.phys-alert .phys-value { color: var(--red); }
+.phys-positive .phys-value { color: var(--green); }
