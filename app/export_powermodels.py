@@ -97,6 +97,12 @@ def _write_solver_handoff(
     *,
     n_per_mode: int,
 ) -> dict[str, Any]:
+    required_solver_scripts = [
+        "solve_topo_json.jl",
+        "export_gridsfm_data.jl",
+        "solve_pyg_json.jl",
+        "gen_perturbed_data.jl",
+    ]
     solvable_paths = [
         str(Path(export["output_path"]).with_suffix("").with_suffix(".solvable.json"))
         for export in exports
@@ -119,11 +125,24 @@ def _write_solver_handoff(
         ")",
         "$ErrorActionPreference = 'Stop'",
         "",
+        "if (-not (Get-Command julia -ErrorAction SilentlyContinue)) {",
+        "    throw 'Julia is not available on PATH. Install Julia or open a shell where julia is available before running this handoff script.'",
+        "}",
+        "",
+        f"$RequiredScripts = @({', '.join(repr(script) for script in required_solver_scripts)})",
+        "foreach ($ScriptName in $RequiredScripts) {",
+        "    $ScriptPath = Join-Path $SolverPipeline $ScriptName",
+        "    if (-not (Test-Path $ScriptPath)) {",
+        "        throw \"Missing solver script: $ScriptPath\"",
+        "    }",
+        "}",
+        "",
     ]
     for export, solvable_path, pyg_path in zip(exports, solvable_paths, pyg_paths, strict=True):
         raw_path = export["output_path"]
         lines.extend(
             [
+                f'if (-not (Test-Path "{raw_path}")) {{ throw "Missing raw PowerModels file: {raw_path}" }}',
                 f'julia --project="$SolverPipeline" "$SolverPipeline\\solve_topo_json.jl" "{raw_path}" "{solvable_path}"',
                 f'julia --project="$SolverPipeline" "$SolverPipeline\\export_gridsfm_data.jl" "{solvable_path}" "{pyg_path}"',
                 f'julia --project="$SolverPipeline" "$SolverPipeline\\solve_pyg_json.jl" "{solvable_path}" "{pyg_path}"',
@@ -140,6 +159,8 @@ def _write_solver_handoff(
 
     return {
         "script_path": str(script_path),
+        "default_solver_pipeline": "..\\GridSFM\\power_grid\\US\\topology_solver_pipeline",
+        "required_solver_scripts": required_solver_scripts,
         "grids_solvable_path": str(grids_solvable_path),
         "solvable_paths": solvable_paths,
         "pyg_paths": pyg_paths,

@@ -80,14 +80,25 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert overnight["demand_snapshot"] == "overnight_04h"
     assert peak["_metadata"]["include_hk_interties"] is True
     assert peak["_metadata"]["hk_intertie_derate"] == 0.5
-    assert "solve_topo_json.jl" in handoff_path.read_text(encoding="utf-8")
-    assert "solve_pyg_json.jl" in handoff_path.read_text(encoding="utf-8")
-    assert "gen_perturbed_data.jl" in handoff_path.read_text(encoding="utf-8")
+    handoff_script = handoff_path.read_text(encoding="utf-8")
+    assert "Get-Command julia" in handoff_script
+    assert "Test-Path $ScriptPath" in handoff_script
+    assert "solve_topo_json.jl" in handoff_script
+    assert "export_gridsfm_data.jl" in handoff_script
+    assert "solve_pyg_json.jl" in handoff_script
+    assert "gen_perturbed_data.jl" in handoff_script
     assert grids_solvable_path.read_text(encoding="utf-8").splitlines() == [
         f"{output_dir / 'hong_kong_16h_model.solvable.json'} 3",
         f"{output_dir / 'hong_kong_04h_model.solvable.json'} 3",
     ]
     assert manifest["solver_handoff"]["script_path"] == str(handoff_path)
+    assert manifest["solver_handoff"]["default_solver_pipeline"] == "..\\GridSFM\\power_grid\\US\\topology_solver_pipeline"
+    assert manifest["solver_handoff"]["required_solver_scripts"] == [
+        "solve_topo_json.jl",
+        "export_gridsfm_data.jl",
+        "solve_pyg_json.jl",
+        "gen_perturbed_data.jl",
+    ]
     assert manifest["solver_handoff"]["grids_solvable_path"] == str(grids_solvable_path)
     assert manifest["solver_handoff"]["n_per_mode"] == 3
     assert manifest["exports"][0]["validation"]["status"] == "ok"
