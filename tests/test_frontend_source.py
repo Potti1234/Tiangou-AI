@@ -98,10 +98,13 @@ def test_frontend_dynamic_route_and_page_use_dynamic_api() -> None:
     assert '<Link to="/dynamic">Dynamic</Link>' in app_source
     assert "/dynamic/scenarios" in page_source
     assert "/dynamic/simulate" in page_source
-    assert "Before intervention" in page_source
-    assert "After PINN dispatch" in page_source
+    assert "No stabilization" in page_source
+    assert "Tiangou stabilization active" in page_source
     assert "PINN H" in page_source
     assert "Frequency timeline" in page_source
     assert "Inertia H" in page_source
-    assert "Real grid derived" in page_source
+    assert "Real dashboard grid" in page_source
     assert "synthetic_assumption_counts" in page_source
+    assert "RealGridMapPanel" in page_source
+    assert "active_sources" in page_source
+    assert "/grid/dashboard-snapshot" in page_source

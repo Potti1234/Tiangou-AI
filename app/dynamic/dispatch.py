@@ -14,7 +14,7 @@ class DispatchEngine:
         for action in self.actions:
             if action["type"].startswith("demand") or delta_P < -50:
                 selected.append(action)
-            if len(selected) >= 3:
+            if len(selected) >= 8:
                 break
         return selected
 
@@ -39,34 +39,34 @@ def _build_actions(grid_config: dict[str, Any], ev_shed_mw: float) -> list[dict[
         })
     actions.append({
         "id": "fast_demand_response",
-        "description": "Curtail flexible demand (-200 MW assumption)",
+        "description": "Curtail flexible demand (-800 MW assumption)",
         "type": "demand_reduction_direct",
-        "delta_mw": -200,
+        "delta_mw": -800,
         "delta_H": 0.0,
-        "lead_time_s": 5,
+        "lead_time_s": 1,
         "cost_per_mwh": 15,
         "co2_kg_per_mwh": 0,
     })
     candidates = sorted(
         [
             source for source in grid_config.get("sources", [])
-            if source.get("type") in {"gas_ccgt", "other_dispatchable", "generic_capacity_equivalent"} and float(source.get("capacity_mw") or 0.0) > 0
+            if source.get("type") in {"coal", "gas_ccgt", "other_dispatchable", "generic_capacity_equivalent"} and float(source.get("capacity_mw") or 0.0) > 0
         ],
         key=lambda source: float(source.get("capacity_mw") or 0.0),
         reverse=True,
     )
-    for index, source in enumerate(candidates[:2], start=1):
-        delta = min(400.0, float(source.get("capacity_mw") or 0.0))
+    for index, source in enumerate(candidates[:6], start=1):
+        delta = float(source.get("capacity_mw") or 0.0)
         actions.append({
             "id": f"start_dispatchable_{index}",
-            "description": f"Increase {source.get('name')} (+{delta:.0f} MW)",
+            "description": f"Fast redispatch {source.get('name')} (+{delta:.0f} MW)",
             "type": "generation_increase",
             "source": source.get("name"),
             "delta_mw": delta,
             "delta_H": delta * float(source.get("H") or 0.0) / 12000.0,
-            "lead_time_s": 60,
+            "lead_time_s": 1,
+            "emergency": True,
             "cost_per_mwh": 85,
             "co2_kg_per_mwh": 490,
         })
     return actions
-

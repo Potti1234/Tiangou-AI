@@ -212,6 +212,12 @@ class GridSimulator:
             for source in self.get_all_sources():
                 if source.get("name") == action.get("source"):
                     source["online"] = True
+                    if action.get("emergency"):
+                        source["current_output_mw"] = min(
+                            float(source.get("capacity_mw") or 0.0),
+                            float(source.get("current_output_mw") or 0.0) + target,
+                        )
+                        continue
                     ramp_rate = float(source.get("ramp_rate_mw_per_min") or 0.0)
                     if ramp_rate > 0:
                         source["current_output_mw"] = min(float(source.get("current_output_mw") or 0.0), float(source.get("capacity_mw") or 0.0))
@@ -309,4 +315,3 @@ class GridSimulator:
 
     def clone(self) -> "GridSimulator":
         return copy.deepcopy(self)
-

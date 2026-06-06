@@ -36,9 +36,22 @@ class DualTimelineSimulation:
         for step in range(duration_s):
             event = scenario if step == DISTURBANCE_T else None
             state_A = sim_A.step(disturbance=event)
-            state_B = sim_B.step(disturbance=event)
             actions_this_step: list[dict[str, Any]] = []
             intervention_triggered = False
+            if event is not None:
+                for action in self.dispatch.select_actions(
+                    1.0,
+                    sim_B.compute_H_system(),
+                    float(event.get("magnitude_mw") or 0.0),
+                    [48.8],
+                ):
+                    if action["id"] in applied:
+                        continue
+                    sim_B.apply_action(action)
+                    applied.add(action["id"])
+                    actions_this_step.append(action)
+                    intervention_triggered = True
+            state_B = sim_B.step(disturbance=event)
             trajectory = state_B.trajectory_60s
             if (trajectory and min(trajectory) < 49.5) or state_B.df_dt < -0.02 or state_B.risk_level in {"ALERT", "CRITICAL"}:
                 for action in self.dispatch.select_actions(state_B.risk_score, state_B.H_physical, state_B.Pm - state_B.Pe, trajectory):
@@ -97,4 +110,3 @@ def _compute_kpis(frames: list[dict[str, Any]]) -> dict[str, Any]:
         "time_to_alert_s": next((frame["t"] for frame in frames if frame["B"]["risk_level"] == "ALERT"), None),
         "time_to_critical_s": next((frame["t"] for frame in frames if frame["B"]["risk_level"] == "CRITICAL"), None),
     }
-
