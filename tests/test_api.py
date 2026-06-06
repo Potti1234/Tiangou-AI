@@ -117,6 +117,10 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
             params={"include_hk_interties": True, "hk_intertie_derate": 0.5},
         )
         validation_response = client.get("/grid/topology/validation")
+        diagnostics_response = client.get(
+            "/topology/diagnostics",
+            params={"include_hk_interties": True, "hk_intertie_derate": 0.5},
+        )
         calibration_response = client.get("/calibration/summary")
         summary_response = client.get(
             "/grid/topology/pipeline-summary",
@@ -130,6 +134,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert filtered_response.status_code == 200
     assert intertie_validation_response.status_code == 200
     assert validation_response.status_code == 200
+    assert diagnostics_response.status_code == 200
     assert calibration_response.status_code == 200
     assert summary_response.status_code == 200
     payload = preview_response.json()
@@ -151,6 +156,11 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert validation_payload["metrics"]["severe_branch_voltage_mismatch_count"] == 0
     assert validation_payload["metrics"]["low_confidence_counts"]["load"] == 0
     assert validation_payload["metrics"]["calibration"]["load_provenance_class_share"]["synthetic"] == 0.0
+    diagnostics_payload = diagnostics_response.json()
+    assert set(diagnostics_payload) >= {"summary", "synthetic_branches", "voltage_mismatches", "recommended_next_fixes"}
+    assert diagnostics_payload["summary"]["synthetic_branch_count"] == 0
+    assert diagnostics_payload["summary"]["missing_provenance_count"] == 0
+    assert diagnostics_payload["summary"]["severe_voltage_mismatch_count"] == intertie_validation_response.json()["metrics"]["severe_branch_voltage_mismatch_count"]
     calibration_payload = calibration_response.json()
     assert calibration_payload["source_year"] == 2023
     assert calibration_payload["sector_gwh"]["commercial"] == 7359.0

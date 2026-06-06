@@ -5,6 +5,7 @@ import app.topology as topology_module
 from app.topology import (
     _classify_preview_branch,
     build_powermodels_preview,
+    build_topology_diagnostics,
     build_topology_preview,
     normalize_voltage,
     parse_circuit_count,
@@ -906,6 +907,43 @@ def test_powermodels_preview_can_include_hk_intertie() -> None:
     assert validation["status"] == "warning"
     assert "severe_branch_voltage_mismatch" in {warning["code"] for warning in validation["warnings"]}
     assert validation["metrics"]["island_count"] == 1
+
+
+def test_topology_diagnostics_reports_synthetic_branches_and_voltage_mismatches() -> None:
+    case = build_powermodels_preview(
+        _sample_rows(),
+        snap_tolerance_km=0.2,
+        include_hk_interties=True,
+    )
+    validation = validate_powermodels_case(case)
+
+    diagnostics = build_topology_diagnostics(case)
+
+    assert diagnostics["summary"]["solver_branch_count"] == case["_metadata"]["branch_count"]
+    assert diagnostics["summary"]["synthetic_branch_count"] == 1
+    assert diagnostics["summary"]["synthetic_branch_share"] == 0.5
+    assert diagnostics["summary"]["voltage_mismatch_count"] == validation["metrics"]["branch_voltage_mismatch_count"]
+    assert diagnostics["summary"]["severe_voltage_mismatch_count"] == validation["metrics"]["severe_branch_voltage_mismatch_count"]
+    assert diagnostics["summary"]["missing_provenance_count"] == 0
+    synthetic = diagnostics["synthetic_branches"][0]
+    assert synthetic["source_id"] == "synthetic:intertie:clp-hk-electric"
+    assert synthetic["provenance"] == "public_interconnection_capacity_equivalent"
+    assert synthetic["category"] == "public_interconnection_capacity_equivalent"
+    assert synthetic["recommended_action"] == "keep as documented equivalent"
+    assert synthetic["from_bus"]["source_id"]
+    assert synthetic["to_bus"]["base_kv"] is not None
+    assert synthetic["rate_mva"] == 720.0
+    mismatch = diagnostics["voltage_mismatches"][0]
+    assert mismatch["source_id"] == "synthetic:intertie:clp-hk-electric"
+    assert mismatch["severe"] is True
+    assert mismatch["provenance"] == "public_interconnection_capacity_equivalent"
+    assert mismatch["recommended_action"] in {
+        "correct branch voltage from endpoint consensus",
+        "review OSM tags manually",
+    }
+    assert mismatch["endpoints"][0]["bus_source_id"]
+    assert mismatch["endpoints"][0]["relative_difference"] >= 0.5
+    assert diagnostics["recommended_next_fixes"]
 
 
 def test_powermodels_preview_can_derate_hk_intertie() -> None:

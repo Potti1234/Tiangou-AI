@@ -6,6 +6,7 @@ import pytest
 from app.database import connect, init_db
 from app.export_load_allocation import export_hk_electric_load_allocation
 from app.export_powermodels import export_hong_kong_phase1_bundle, export_powermodels_case
+from app.export_topology_diagnostics import export_topology_diagnostics
 from app.repository import create_ingest_run, upsert_elements
 
 
@@ -71,6 +72,29 @@ def test_export_hk_electric_load_allocation_writes_provenance_artifact(tmp_path)
         "observed_hk_electric_public_consumption",
         "inferred_clp_from_hk_total_minus_hk_electric",
     }
+
+
+def test_export_topology_diagnostics_writes_json_artifact(tmp_path) -> None:
+    db_path = tmp_path / "grid.sqlite3"
+    output_path = tmp_path / "diagnostics" / "hong_kong_topology_diagnostics.json"
+    _seed_grid(db_path)
+    _seed_hk_electric_bus(db_path)
+
+    result = export_topology_diagnostics(
+        database_path=db_path,
+        output_path=output_path,
+        snap_tolerance_km=0.2,
+        include_hk_interties=True,
+        hk_intertie_derate=0.5,
+    )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result["summary"]["synthetic_branch_count"] == 1
+    assert payload["summary"]["synthetic_branch_count"] == 1
+    assert payload["summary"]["missing_provenance_count"] == 0
+    assert payload["synthetic_branches"][0]["provenance"] == "public_interconnection_capacity_equivalent"
+    assert payload["synthetic_branches"][0]["recommended_action"] == "keep as documented equivalent"
+    assert payload["recommended_next_fixes"]
 
 
 def test_export_powermodels_case_writes_overnight_snapshot(tmp_path) -> None:

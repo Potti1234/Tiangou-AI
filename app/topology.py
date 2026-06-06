@@ -896,6 +896,9 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "area": 1,
             "zone": 1,
             "source_id": bus["id"],
+            "name": bus.get("name"),
+            "lat": bus.get("lat"),
+            "lon": bus.get("lon"),
             "provenance": bus.get("provenance"),
             "confidence": bus.get("confidence"),
             "service_territory": bus.get("service_territory"),
@@ -1382,6 +1385,215 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
         "islands": island_report["islands"],
         "voltage_mismatches": voltage_mismatches,
     }
+
+
+def build_topology_diagnostics(case: Mapping[str, Any]) -> dict[str, Any]:
+    buses = case.get("bus") or {}
+    branches = case.get("branch") or {}
+    validation = validate_powermodels_case(case)
+    voltage_mismatches = _diagnostic_voltage_mismatches(buses, branches, validation["voltage_mismatches"])
+    synthetic_branches = _diagnostic_synthetic_branches(buses, branches)
+    severe_count = sum(1 for mismatch in voltage_mismatches if mismatch["severe"])
+    missing_provenance = [
+        item
+        for item in [*synthetic_branches, *voltage_mismatches]
+        if not item.get("provenance")
+    ]
+    summary = {
+        "solver_bus_count": len(buses),
+        "solver_branch_count": len(branches),
+        "synthetic_branch_count": len(synthetic_branches),
+        "synthetic_branch_share": round(len(synthetic_branches) / len(branches), 6) if branches else 0.0,
+        "voltage_mismatch_count": len(voltage_mismatches),
+        "severe_voltage_mismatch_count": severe_count,
+        "missing_provenance_count": len(missing_provenance),
+    }
+    return {
+        "summary": summary,
+        "synthetic_branches": synthetic_branches,
+        "voltage_mismatches": voltage_mismatches,
+        "recommended_next_fixes": _recommended_next_fixes(synthetic_branches, voltage_mismatches),
+        "validation_status": validation["status"],
+    }
+
+
+def _diagnostic_synthetic_branches(
+    buses: Mapping[str, Any],
+    branches: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    return [
+        _diagnostic_branch_record(
+            branch_id=branch_id,
+            branch=branch,
+            buses=buses,
+            category=_synthetic_branch_category(branch),
+            recommended_action=_synthetic_branch_recommended_action(branch),
+        )
+        for branch_id, branch in sorted(branches.items(), key=lambda item: int(item[0]))
+        if _is_synthetic_solver_branch(branch)
+    ]
+
+
+def _diagnostic_voltage_mismatches(
+    buses: Mapping[str, Any],
+    branches: Mapping[str, Any],
+    mismatches: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    records = []
+    for mismatch in mismatches:
+        branch_id = str(mismatch["branch_id"])
+        branch = branches.get(branch_id)
+        if branch is None:
+            continue
+        endpoint_records = []
+        for endpoint in mismatch["endpoints"]:
+            endpoint_field = str(endpoint["endpoint"])
+            bus_number = endpoint.get("bus_i")
+            bus = buses.get(str(bus_number))
+            endpoint_records.append(
+                {
+                    **endpoint,
+                    "bus_source_id": bus.get("source_id") if bus else None,
+                    "bus_name": bus.get("name") if bus else None,
+                    "bus_lat": bus.get("lat") if bus else None,
+                    "bus_lon": bus.get("lon") if bus else None,
+                    "role": "from" if endpoint_field == "f_bus" else "to",
+                }
+            )
+        severe = any(float(endpoint["relative_difference"]) >= 0.5 for endpoint in endpoint_records)
+        category = _voltage_mismatch_category(branch, endpoint_records)
+        record = _diagnostic_branch_record(
+            branch_id=branch_id,
+            branch=branch,
+            buses=buses,
+            category=category,
+            recommended_action=_voltage_mismatch_recommended_action(branch, endpoint_records),
+        )
+        record.update(
+            {
+                "branch_voltage_kv": mismatch.get("branch_voltage_kv"),
+                "matched_voltage_kv": branch.get("matched_voltage_kv"),
+                "endpoints": endpoint_records,
+                "severe": severe,
+                "transformer": bool(branch.get("transformer")),
+                "transformer_inference": branch.get("transformer_inference"),
+            }
+        )
+        records.append(record)
+    return records
+
+
+def _diagnostic_branch_record(
+    *,
+    branch_id: str,
+    branch: Mapping[str, Any],
+    buses: Mapping[str, Any],
+    category: str,
+    recommended_action: str,
+) -> dict[str, Any]:
+    from_bus = buses.get(str(branch.get("f_bus")))
+    to_bus = buses.get(str(branch.get("t_bus")))
+    return {
+        "solver_branch_id": branch_id,
+        "source_id": branch.get("source_id"),
+        "provenance": branch.get("provenance"),
+        "source_power": branch.get("source_power"),
+        "from_bus": _diagnostic_bus_endpoint(from_bus),
+        "to_bus": _diagnostic_bus_endpoint(to_bus),
+        "from_bus_id": from_bus.get("source_id") if from_bus else None,
+        "to_bus_id": to_bus.get("source_id") if to_bus else None,
+        "from_bus_name": from_bus.get("name") if from_bus else None,
+        "to_bus_name": to_bus.get("name") if to_bus else None,
+        "from_base_kv": from_bus.get("base_kv") if from_bus else None,
+        "to_base_kv": to_bus.get("base_kv") if to_bus else None,
+        "branch_matched_voltage_kv": branch.get("matched_voltage_kv"),
+        "rate_mva": branch.get("rate_a"),
+        "length_km": branch.get("length_km"),
+        "circuit_class": branch.get("circuit_class"),
+        "category": category,
+        "recommended_action": recommended_action,
+    }
+
+
+def _diagnostic_bus_endpoint(bus: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if bus is None:
+        return None
+    return {
+        "bus_i": bus.get("bus_i"),
+        "source_id": bus.get("source_id"),
+        "name": bus.get("name"),
+        "base_kv": bus.get("base_kv"),
+        "lat": bus.get("lat"),
+        "lon": bus.get("lon"),
+        "provenance": bus.get("provenance"),
+    }
+
+
+def _is_synthetic_solver_branch(branch: Mapping[str, Any]) -> bool:
+    provenance = str(branch.get("provenance") or "")
+    source_id = str(branch.get("source_id") or "")
+    return source_id.startswith("synthetic:") or "synthetic" in provenance or "public_interconnection" in provenance
+
+
+def _synthetic_branch_category(branch: Mapping[str, Any]) -> str:
+    provenance = str(branch.get("provenance") or "")
+    source_id = str(branch.get("source_id") or "")
+    if provenance == "synthetic_service_territory_backbone" or "service-backbone" in source_id:
+        return "synthetic_service_territory_backbone"
+    if provenance == "public_interconnection_capacity_equivalent":
+        return "public_interconnection_capacity_equivalent"
+    if source_id.startswith("synthetic:"):
+        return "synthetic_endpoint_bridge"
+    return "unknown_synthetic"
+
+
+def _synthetic_branch_recommended_action(branch: Mapping[str, Any]) -> str:
+    category = _synthetic_branch_category(branch)
+    if category == "synthetic_service_territory_backbone":
+        return "replace with OSM cable/line if available"
+    if category == "public_interconnection_capacity_equivalent":
+        return "keep as documented equivalent"
+    if category == "synthetic_endpoint_bridge":
+        return "improve endpoint snapping"
+    return "review manually"
+
+
+def _voltage_mismatch_category(branch: Mapping[str, Any], endpoints: list[Mapping[str, Any]]) -> str:
+    if branch.get("transformer"):
+        return "inferred_transformer"
+    if str(branch.get("circuit_class") or "") != "inter_facility":
+        return "non_interfacility_branch"
+    if len(endpoints) == 1:
+        return "endpoint_branch_voltage_disagreement"
+    endpoint_voltages = {float(endpoint["bus_base_kv"]) for endpoint in endpoints if endpoint.get("bus_base_kv") is not None}
+    if len(endpoint_voltages) == 1:
+        return "branch_voltage_from_endpoint_consensus"
+    return "manual_voltage_tag_review"
+
+
+def _voltage_mismatch_recommended_action(branch: Mapping[str, Any], endpoints: list[Mapping[str, Any]]) -> str:
+    category = _voltage_mismatch_category(branch, endpoints)
+    if category == "inferred_transformer":
+        return "infer transformer"
+    if category == "branch_voltage_from_endpoint_consensus":
+        return "correct branch voltage from endpoint consensus"
+    if category == "non_interfacility_branch":
+        return "drop non-interfacility branch"
+    return "review OSM tags manually"
+
+
+def _recommended_next_fixes(
+    synthetic_branches: list[Mapping[str, Any]],
+    voltage_mismatches: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    counts: dict[tuple[str, str], int] = {}
+    for item in [*synthetic_branches, *voltage_mismatches]:
+        key = (str(item.get("category") or "unknown"), str(item.get("recommended_action") or "review manually"))
+        counts[key] = counts.get(key, 0) + 1
+    return [
+        {"category": category, "recommended_action": action, "count": count}
+        for (category, action), count in sorted(counts.items(), key=lambda item: (-item[1], item[0][0]))
+    ]
 
 
 def _calibration_validation_metrics(

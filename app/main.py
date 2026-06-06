@@ -25,6 +25,7 @@ from app.topology import (
     DEMAND_SNAPSHOTS,
     build_powermodels_preview,
     build_powermodels_validation,
+    build_topology_diagnostics,
     build_topology_preview,
     validate_powermodels_case,
 )
@@ -294,6 +295,37 @@ def topology_validation(
     )
 
 
+@app.get("/topology/diagnostics")
+def topology_diagnostics(
+    region_key: str = "hong-kong",
+    snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
+    demand_snapshot: str = Query(default="peak_16h", pattern=DEMAND_SNAPSHOT_PATTERN),
+    include_hk_interties: bool = False,
+    hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
+    min_voltage_kv: float | None = Query(default=None, gt=0.0),
+) -> dict[str, Any]:
+    try:
+        get_region(region_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    with get_db() as conn:
+        rows = list_elements(
+            conn,
+            region_key=region_key,
+            limit=100000,
+        )
+    case = build_powermodels_preview(
+        rows,
+        snap_tolerance_km=snap_tolerance_km,
+        demand_snapshot=demand_snapshot,
+        include_hk_interties=include_hk_interties,
+        hk_intertie_derate=hk_intertie_derate,
+        min_voltage_kv=min_voltage_kv,
+    )
+    return build_topology_diagnostics(case)
+
+
 @app.get("/grid/topology/pipeline-summary")
 def topology_pipeline_summary(
     region_key: str = "hong-kong",
@@ -333,6 +365,7 @@ def topology_pipeline_summary(
         min_voltage_kv=min_voltage_kv,
     )
     validation = validate_powermodels_case(case)
+    diagnostics = build_topology_diagnostics(case)
 
     raw_counts = {}
     for row in rows:
@@ -386,7 +419,9 @@ def topology_pipeline_summary(
             "errors": validation["errors"],
             "warnings": validation["warnings"],
             "metrics": validation["metrics"],
+            "voltage_mismatches": validation["voltage_mismatches"],
         },
+        "diagnostics": diagnostics,
         "handoff_artifacts": handoff_artifacts["paths"],
         "handoff_artifact_exists": handoff_artifacts["exists"],
     }
