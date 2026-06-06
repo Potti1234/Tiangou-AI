@@ -10,7 +10,7 @@ import ReadinessPage from "./pages/ReadinessPage";
 import ActionsPage from "./pages/ActionsPage";
 import ScenariosPage from "./pages/ScenariosPage";
 import AuditPage from "./pages/AuditPage";
-import useLiveSimulation from "./hooks/useLiveSimulation";
+import useBackendSimulation from "./hooks/useBackendSimulation";
 import { baseAuditEvents, scenarios } from "./data/scenarios";
 
 const validRoutes = new Set([
@@ -65,7 +65,7 @@ export default function App() {
     setAuditEvents((current) => [{ time, ...event }, ...current]);
   }, []);
 
-  const simulation = useLiveSimulation({
+  const simulation = useBackendSimulation({
     scenarios,
     selectedScenario: scenario,
     onEvent: addAuditEvent,
