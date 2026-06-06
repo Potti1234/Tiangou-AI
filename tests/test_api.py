@@ -121,6 +121,10 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
             "/topology/diagnostics",
             params={"include_hk_interties": True, "hk_intertie_derate": 0.5},
         )
+        reconciliation_response = client.get(
+            "/topology/asset-reconciliation",
+            params={"include_hk_interties": True, "hk_intertie_derate": 0.5},
+        )
         calibration_response = client.get("/calibration/summary")
         summary_response = client.get(
             "/grid/topology/pipeline-summary",
@@ -135,6 +139,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert intertie_validation_response.status_code == 200
     assert validation_response.status_code == 200
     assert diagnostics_response.status_code == 200
+    assert reconciliation_response.status_code == 200
     assert calibration_response.status_code == 200
     assert summary_response.status_code == 200
     payload = preview_response.json()
@@ -161,6 +166,11 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert diagnostics_payload["summary"]["synthetic_branch_count"] == 0
     assert diagnostics_payload["summary"]["missing_provenance_count"] == 0
     assert diagnostics_payload["summary"]["severe_voltage_mismatch_count"] == intertie_validation_response.json()["metrics"]["severe_branch_voltage_mismatch_count"]
+    reconciliation_payload = reconciliation_response.json()
+    assert set(reconciliation_payload) >= {"summary", "linear_assets", "generation_assets", "dropped_or_aggregated_assets"}
+    assert reconciliation_payload["summary"]["raw_by_power"] == {"line": 1, "substation": 2}
+    assert reconciliation_payload["summary"]["raw_linear_count"] == 1
+    assert reconciliation_payload["linear_assets"][0]["status"] == "retained_solver_branch"
     calibration_payload = calibration_response.json()
     assert calibration_payload["source_year"] == 2023
     assert calibration_payload["sector_gwh"]["commercial"] == 7359.0
@@ -174,6 +184,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert summary_payload["raw_osm_counts_by_power"] == {"line": 1, "substation": 2}
     assert summary_payload["topology_metadata"]["min_voltage_kv"] == 100.0
     assert summary_payload["solver_metadata"]["branch_count"] == 1
+    assert summary_payload["asset_reconciliation"]["summary"]["raw_linear_count"] == 1
     assert summary_payload["validation"]["metrics"]["island_count"] == 1
     assert summary_payload["handoff_artifacts"]["pyg_json"].endswith(".pyg.json")
     assert set(summary_payload["handoff_artifact_exists"]) == {"raw_json", "solvable_json", "pyg_json", "scenarios"}

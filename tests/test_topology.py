@@ -4,6 +4,7 @@ import shutil
 import app.topology as topology_module
 from app.topology import (
     _classify_preview_branch,
+    build_asset_reconciliation,
     build_powermodels_preview,
     build_topology_diagnostics,
     build_topology_preview,
@@ -946,6 +947,64 @@ def test_topology_diagnostics_reports_synthetic_branches_and_voltage_mismatches(
     assert diagnostics["recommended_next_fixes"]
 
 
+def test_asset_reconciliation_reports_raw_preview_and_solver_counts() -> None:
+    rows = [*_sample_rows(), *_sample_lamma_generation_rows()]
+    topology = build_topology_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+
+    reconciliation = build_asset_reconciliation(rows, topology, case)
+
+    assert reconciliation["summary"]["raw_by_power"]["plant"] == 2
+    assert reconciliation["summary"]["raw_by_power"]["generator"] == 1
+    assert reconciliation["summary"]["preview_generator_count"] == 3
+    assert reconciliation["summary"]["solver_generator_count"] > 0
+    assert reconciliation["summary"]["raw_generation_count"] == 3
+    assert reconciliation["summary"]["raw_linear_count"] == 2
+
+
+def test_asset_reconciliation_includes_lamma_generation_assets() -> None:
+    rows = [*_sample_rows(), *_sample_lamma_generation_rows()]
+    topology = build_topology_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+
+    generation_assets = build_asset_reconciliation(rows, topology, case)["generation_assets"]
+    by_name = {asset["name"]: asset for asset in generation_assets}
+
+    lamma_power = by_name["Lamma Power Station"]
+    assert lamma_power["parsed_pmax_mw"] == 3736.0
+    assert lamma_power["appears_in_topology_generators"] is True
+    assert lamma_power["status"] in {
+        "retained_solver_generator",
+        "aggregated_into_equivalent_capacity",
+        "not_solver_connected",
+        "preview_generation_candidate",
+    }
+    assert lamma_power["reason"]
+
+    lamma_winds_plant = by_name["Lamma Winds Plant"]
+    assert lamma_winds_plant["parsed_pmax_mw"] == 0.8
+    assert lamma_winds_plant["output_tag"] == "plant:output:electricity"
+    assert lamma_winds_plant["reason"]
+
+    lamma_winds_generator = by_name["Lamma Winds Generator"]
+    assert lamma_winds_generator["parsed_pmax_mw"] == 0.8
+    assert lamma_winds_generator["output_tag"] == "generator:output:electricity"
+    assert lamma_winds_generator["reason"]
+
+
+def test_asset_reconciliation_classifies_raw_lines_and_cables() -> None:
+    rows = _sample_rows()
+    topology = build_topology_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+
+    linear_assets = build_asset_reconciliation(rows, topology, case)["linear_assets"]
+
+    assert {asset["raw_id"] for asset in linear_assets} == {"osm:way:10", "osm:way:11"}
+    assert all(asset["status"] != "unknown" for asset in linear_assets)
+    assert next(asset for asset in linear_assets if asset["raw_id"] == "osm:way:10")["status"] == "retained_solver_branch"
+    assert next(asset for asset in linear_assets if asset["raw_id"] == "osm:way:11")["status"] == "dropped_isolated"
+
+
 def test_powermodels_preview_can_derate_hk_intertie() -> None:
     topology = build_topology_preview(
         _sample_rows(),
@@ -1147,3 +1206,59 @@ def _sample_rows() -> list[dict[str, object]]:
         },
     ]
     return rows
+
+
+def _sample_lamma_generation_rows() -> list[dict[str, object]]:
+    return [
+        {
+            "osm_type": "way",
+            "osm_id": 246974322,
+            "power": "plant",
+            "name": "Lamma Power Station",
+            "voltage": "275000",
+            "operator": "HK Electric",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.221,
+            "lon": 114.107,
+            "tags_json": '{"operator": "HK Electric", "generator:source": "coal;gas", "plant:output:electricity": "3736 MW"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "way",
+            "osm_id": 323123016,
+            "power": "plant",
+            "name": "Lamma Winds Plant",
+            "voltage": "11000",
+            "operator": "HK Electric",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.210,
+            "lon": 114.118,
+            "tags_json": '{"operator": "HK Electric", "generator:source": "wind", "plant:output:electricity": "800 kW"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "way",
+            "osm_id": 323123015,
+            "power": "generator",
+            "name": "Lamma Winds Generator",
+            "voltage": "11000",
+            "operator": "HK Electric",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.210,
+            "lon": 114.118,
+            "tags_json": '{"operator": "HK Electric", "generator:source": "wind", "generator:output:electricity": "800 kW"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+    ]

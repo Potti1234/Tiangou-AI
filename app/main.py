@@ -23,10 +23,12 @@ from app.repository import (
 )
 from app.topology import (
     DEMAND_SNAPSHOTS,
+    build_asset_reconciliation,
     build_powermodels_preview,
     build_powermodels_validation,
     build_topology_diagnostics,
     build_topology_preview,
+    topology_preview_to_powermodels,
     validate_powermodels_case,
 )
 
@@ -168,7 +170,7 @@ async def ingest(region_key: str) -> dict[str, Any]:
 def assets(
     region_key: str | None = None,
     power: str | None = None,
-    limit: int = Query(default=100, ge=1, le=1000),
+    limit: int = Query(default=100, ge=1, le=5000),
     offset: int = Query(default=0, ge=0),
 ) -> list[dict[str, Any]]:
     if region_key is not None:
@@ -326,6 +328,38 @@ def topology_diagnostics(
     return build_topology_diagnostics(case)
 
 
+@app.get("/topology/asset-reconciliation")
+def topology_asset_reconciliation(
+    region_key: str = "hong-kong",
+    snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
+    demand_snapshot: str = Query(default="peak_16h", pattern=DEMAND_SNAPSHOT_PATTERN),
+    include_hk_interties: bool = False,
+    hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
+    min_voltage_kv: float | None = Query(default=None, gt=0.0),
+) -> dict[str, Any]:
+    try:
+        get_region(region_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    with get_db() as conn:
+        rows = list_elements(
+            conn,
+            region_key=region_key,
+            limit=100000,
+        )
+    topology = build_topology_preview(
+        rows,
+        snap_tolerance_km=snap_tolerance_km,
+        demand_snapshot=demand_snapshot,
+        include_hk_interties=include_hk_interties,
+        hk_intertie_derate=hk_intertie_derate,
+        min_voltage_kv=min_voltage_kv,
+    )
+    case = topology_preview_to_powermodels(topology)
+    return build_asset_reconciliation(rows, topology, case)
+
+
 @app.get("/grid/topology/pipeline-summary")
 def topology_pipeline_summary(
     region_key: str = "hong-kong",
@@ -366,6 +400,7 @@ def topology_pipeline_summary(
     )
     validation = validate_powermodels_case(case)
     diagnostics = build_topology_diagnostics(case)
+    reconciliation = build_asset_reconciliation(rows, topology, case)
 
     raw_counts = {}
     for row in rows:
@@ -422,6 +457,12 @@ def topology_pipeline_summary(
             "voltage_mismatches": validation["voltage_mismatches"],
         },
         "diagnostics": diagnostics,
+        "asset_reconciliation": {
+            "summary": reconciliation["summary"],
+            "top_generation_assets": reconciliation["generation_assets"][:10],
+            "top_linear_assets": reconciliation["linear_assets"][:10],
+            "top_dropped_or_aggregated_assets": reconciliation["dropped_or_aggregated_assets"][:10],
+        },
         "handoff_artifacts": handoff_artifacts["paths"],
         "handoff_artifact_exists": handoff_artifacts["exists"],
     }

@@ -1417,6 +1417,226 @@ def build_topology_diagnostics(case: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def build_asset_reconciliation(
+    rows: Iterable[Any],
+    topology: Mapping[str, Any],
+    case: Mapping[str, Any],
+) -> dict[str, Any]:
+    records = [_row_to_record(row) for row in rows]
+    raw_by_power = _count_by(records, "power")
+    linear_assets = _reconcile_linear_assets(records, topology, case)
+    generation_assets = _reconcile_generation_assets(records, topology, case)
+    dropped_or_aggregated_assets = [
+        asset
+        for asset in [*linear_assets, *generation_assets]
+        if asset["status"]
+        not in {
+            "retained_solver_branch",
+            "retained_solver_generator",
+            "reconstructed_preview_only",
+            "preview_generation_candidate",
+        }
+    ]
+    return {
+        "summary": {
+            "raw_asset_count": len(records),
+            "raw_by_power": dict(sorted(raw_by_power.items())),
+            "raw_linear_count": sum(1 for record in records if record.get("power") in BRANCH_POWER_VALUES),
+            "raw_generation_count": sum(1 for record in records if record.get("power") in {"plant", "generator"}),
+            "preview_bus_count": len(topology.get("buses") or []),
+            "preview_branch_count": len(topology.get("branches") or []),
+            "preview_generator_count": len(topology.get("generators") or []),
+            "solver_bus_count": len(case.get("bus") or {}),
+            "solver_branch_count": len(case.get("branch") or {}),
+            "solver_generator_count": len(case.get("gen") or {}),
+            "linear_status_counts": _count_by(linear_assets, "status"),
+            "generation_status_counts": _count_by(generation_assets, "status"),
+        },
+        "linear_assets": linear_assets,
+        "generation_assets": generation_assets,
+        "dropped_or_aggregated_assets": dropped_or_aggregated_assets,
+    }
+
+
+def _reconcile_linear_assets(
+    records: list[dict[str, Any]],
+    topology: Mapping[str, Any],
+    case: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    preview_branches = list(topology.get("branches") or [])
+    preview_by_id = {str(branch.get("id")): branch for branch in preview_branches}
+    merged_by_source: dict[str, Mapping[str, Any]] = {}
+    for branch in preview_branches:
+        for source_id in branch.get("merged_source_ids") or []:
+            merged_by_source[str(source_id)] = branch
+
+    solver_branch_by_source = {
+        str(branch.get("source_id")): str(branch_id)
+        for branch_id, branch in (case.get("branch") or {}).items()
+        if branch.get("source_id")
+    }
+
+    assets = []
+    for record in records:
+        if record.get("power") not in BRANCH_POWER_VALUES:
+            continue
+        raw_id = f"osm:{record['osm_type']}:{record['osm_id']}"
+        preview_branch = preview_by_id.get(raw_id)
+        merged_branch = merged_by_source.get(raw_id)
+        linked_branch = preview_branch or merged_branch
+        linked_branch_id = str(linked_branch.get("id")) if linked_branch else None
+        solver_branch_id = solver_branch_by_source.get(linked_branch_id or raw_id)
+        status, reason = _linear_reconciliation_status(
+            record=record,
+            raw_id=raw_id,
+            preview_branch=preview_branch,
+            merged_branch=merged_branch,
+            solver_branch_id=solver_branch_id,
+        )
+        assets.append(
+            {
+                "osm_type": record["osm_type"],
+                "osm_id": record["osm_id"],
+                "raw_id": raw_id,
+                "name": record.get("name"),
+                "voltage": record.get("voltage"),
+                "voltage_kv": record.get("voltage_kv"),
+                "power": record.get("power"),
+                "operator": record.get("operator"),
+                "geometry_length_km": _geometry_length_km(record.get("geometry") or []),
+                "reconstructed_branch_id": linked_branch_id,
+                "solver_branch_id": solver_branch_id,
+                "status": status,
+                "reason": reason,
+            }
+        )
+    return assets
+
+
+def _linear_reconciliation_status(
+    *,
+    record: Mapping[str, Any],
+    raw_id: str,
+    preview_branch: Mapping[str, Any] | None,
+    merged_branch: Mapping[str, Any] | None,
+    solver_branch_id: str | None,
+) -> tuple[str, str]:
+    if solver_branch_id is not None:
+        return "retained_solver_branch", "Raw line or cable is represented by a solver-retained branch."
+    if merged_branch is not None:
+        return "merged_into_reconstructed_circuit", "Raw segment was merged with adjacent OSM segments into one reconstructed circuit."
+    if preview_branch is not None:
+        circuit_class = str(preview_branch.get("circuit_class") or "unknown")
+        if circuit_class == "self_loop":
+            return "dropped_self_loop", "Reconstructed branch connects a facility to itself and is removed before solver export."
+        if circuit_class == "tap":
+            return "dropped_tap", "Reconstructed branch terminates at a synthetic endpoint and is not exported as an inter-facility solver branch."
+        if circuit_class == "isolated":
+            return "dropped_isolated", "Reconstructed branch is isolated from retained load-bearing topology."
+        if circuit_class == "inter_facility":
+            return "reconstructed_preview_only", "Reconstructed inter-facility branch is visible in preview but not retained in the solver island."
+        return "reconstructed_preview_only", f"Reconstructed preview branch class is {circuit_class}."
+    if record.get("voltage_kv"):
+        return "filtered_low_voltage", "Raw line or cable is absent from the filtered reconstructed view, commonly because of the minimum voltage threshold."
+    if len(record.get("geometry") or []) < 2:
+        return "missing_geometry", "Raw line or cable does not have enough geometry to reconstruct endpoints."
+    return "unknown", "No reconstructed branch could be linked to this raw line or cable."
+
+
+def _reconcile_generation_assets(
+    records: list[dict[str, Any]],
+    topology: Mapping[str, Any],
+    case: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    topology_generators = {
+        str(generator.get("id")): generator
+        for generator in topology.get("generators") or []
+    }
+    topology_bus_ids = {str(bus.get("id")) for bus in topology.get("buses") or []}
+    solver_bus_source_ids = {str(bus.get("source_id")) for bus in (case.get("bus") or {}).values() if bus.get("source_id")}
+    solver_gen_by_source = {
+        str(generator.get("source_id")): str(generator_id)
+        for generator_id, generator in (case.get("gen") or {}).items()
+        if generator.get("source_id")
+    }
+    equivalent_gen_count = sum(
+        1
+        for generator in (case.get("gen") or {}).values()
+        if "equivalent" in str(generator.get("resource_type") or "")
+    )
+
+    assets = []
+    for record in records:
+        if record.get("power") not in {"plant", "generator"}:
+            continue
+        generator_id = f"gen:{record['osm_type']}:{record['osm_id']}"
+        topology_generator = topology_generators.get(generator_id)
+        mapped_bus_id = str(topology_generator.get("bus_id")) if topology_generator else None
+        solver_generator_id = solver_gen_by_source.get(generator_id)
+        parsed_pmax_mw, capacity_tag = _generator_capacity(record.get("tags") or {})
+        status, reason = _generation_reconciliation_status(
+            record=record,
+            topology_generator=topology_generator,
+            mapped_bus_id=mapped_bus_id,
+            topology_bus_ids=topology_bus_ids,
+            solver_bus_source_ids=solver_bus_source_ids,
+            solver_generator_id=solver_generator_id,
+            equivalent_gen_count=equivalent_gen_count,
+        )
+        assets.append(
+            {
+                "osm_type": record["osm_type"],
+                "osm_id": record["osm_id"],
+                "raw_id": f"osm:{record['osm_type']}:{record['osm_id']}",
+                "generator_id": generator_id,
+                "name": record.get("name"),
+                "power": record.get("power"),
+                "operator": record.get("operator"),
+                "voltage": record.get("voltage"),
+                "voltage_kv": record.get("voltage_kv"),
+                "source": (record.get("tags") or {}).get("generator:source"),
+                "fuel": (record.get("tags") or {}).get("generator:source"),
+                "output_tag": capacity_tag,
+                "output_raw": (record.get("tags") or {}).get(capacity_tag) if capacity_tag else None,
+                "parsed_pmax_mw": parsed_pmax_mw,
+                "mapped_bus_id": mapped_bus_id,
+                "appears_in_topology_generators": topology_generator is not None,
+                "appears_in_solver_gen": solver_generator_id is not None,
+                "solver_generator_id": solver_generator_id,
+                "status": status,
+                "reason": reason,
+            }
+        )
+    return assets
+
+
+def _generation_reconciliation_status(
+    *,
+    record: Mapping[str, Any],
+    topology_generator: Mapping[str, Any] | None,
+    mapped_bus_id: str | None,
+    topology_bus_ids: set[str],
+    solver_bus_source_ids: set[str],
+    solver_generator_id: str | None,
+    equivalent_gen_count: int,
+) -> tuple[str, str]:
+    if solver_generator_id is not None:
+        return "retained_solver_generator", "Raw plant or generator has a capacity tag and is exported as a solver generator."
+    if topology_generator is None:
+        if record.get("voltage_kv"):
+            return "filtered_low_voltage", "Raw generation asset is absent from the filtered reconstructed view, commonly because of the minimum voltage threshold."
+        return "missing_voltage_or_bus_mapping", "Raw generation asset did not produce a reconstructed bus or generator candidate."
+    if topology_generator.get("pmax_mw") is None:
+        return "missing_capacity_tag", "Raw generation asset is visible as a candidate but lacks a parsable capacity tag for solver export."
+    if not mapped_bus_id or mapped_bus_id not in topology_bus_ids:
+        return "missing_voltage_or_bus_mapping", "Generator candidate does not map to an available reconstructed bus."
+    if mapped_bus_id not in solver_bus_source_ids:
+        return "not_solver_connected", "Generator candidate is on a preview bus that is not retained in the load-bearing solver case."
+    if equivalent_gen_count:
+        return "aggregated_into_equivalent_capacity", "Solver uses territory-level equivalent capacity for this load-bearing island instead of this raw generator candidate."
+    return "preview_generation_candidate", "Generation candidate is visible in the reconstructed layer but not exported as a solver generator."
+
+
 def _diagnostic_synthetic_branches(
     buses: Mapping[str, Any],
     branches: Mapping[str, Any],
