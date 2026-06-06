@@ -104,6 +104,7 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     inferred_transformer = next(branch for branch in case["branch"].values() if branch["source_id"] == "osm:way:10")
     assert inferred_transformer["transformer"] is True
     assert inferred_transformer["parameter_source"] == "inferred_transformer_voltage_pair_default"
+    assert inferred_transformer["parameter_table"] == "transformer_two_winding_defaults"
     assert inferred_transformer["transformer_inference"]["method"] == "clear_voltage_mismatch_branch_conversion"
     assert case["_metadata"]["inferred_transformer_branch_count"] == 1
     assert case["_metadata"]["synthetic_branch_count"] == 0
@@ -126,6 +127,13 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
         branch["parameter_source"]
         for branch in case["branch"].values()
     } == {"osm_with_inferred_parameters", "inferred_transformer_voltage_pair_default"}
+    assert {
+        branch["parameter_table"]
+        for branch in case["branch"].values()
+    } == {"underground_cable_defaults", "transformer_two_winding_defaults"}
+    assert case["_metadata"]["parameter_lookup_tables"]["overhead_line_voltage_kv"] == [33.0, 110.0, 132.0, 220.0, 275.0, 400.0]
+    assert case["_metadata"]["parameter_lookup_tables"]["underground_cable_voltage_kv"] == [33.0, 110.0, 132.0, 220.0, 275.0, 400.0]
+    assert case["_metadata"]["parameter_lookup_tables"]["load_power_factor"] == 0.95
     assert all(load["provenance"] == "public_peak_demand_scaled_voltage_weighted_substation_split" for load in case["load"].values())
     assert all(load["allocation_method"] == "voltage_weighted_substation_split" for load in case["load"].values())
     assert case["_metadata"]["provenance_summary"]["branch"] == {"osm_with_inferred_parameters": 2}
@@ -344,6 +352,7 @@ def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
     assert tagged_export["energy_source"] == "gas"
     assert tagged_export["resource_type"] == "local_osm_generator"
     assert tagged_export["cost_class"] == "thermal_gas"
+    assert tagged_export["pmin"] == 0.0
 
 
 def test_powermodels_preview_prunes_disconnected_no_load_generation_island() -> None:
@@ -419,6 +428,7 @@ def test_powermodels_preview_connects_load_islands_with_synthetic_backbone() -> 
     assert len(backbone) == 1
     assert backbone[0]["service_territory"] == "clp"
     assert backbone[0]["provenance"] == "synthetic_service_territory_backbone"
+    assert backbone[0]["parameter_defaults"]["parameter_table"] == "underground_cable_defaults"
     assert case["_metadata"]["synthetic_branch_count"] == 1
     assert case["_metadata"]["provenance_summary"]["branch"]["synthetic_service_territory_backbone"] == 1
     assert len(equivalent_gens) == 2

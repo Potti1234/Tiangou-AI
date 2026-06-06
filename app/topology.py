@@ -46,24 +46,48 @@ DEMAND_SNAPSHOTS = {
     },
 }
 BASE_MVA = 100.0
+LOAD_DEFAULTS = {
+    "power_factor": 0.95,
+}
 
-VOLTAGE_DEFAULTS = {
-    "line": {
-        400.0: {"r_ohm_per_km": 0.028, "x_ohm_per_km": 0.32, "b_us_per_km": 3.6, "rate_mva": 1800.0},
-        275.0: {"r_ohm_per_km": 0.035, "x_ohm_per_km": 0.34, "b_us_per_km": 3.2, "rate_mva": 1200.0},
-        220.0: {"r_ohm_per_km": 0.045, "x_ohm_per_km": 0.38, "b_us_per_km": 2.8, "rate_mva": 900.0},
-        132.0: {"r_ohm_per_km": 0.08, "x_ohm_per_km": 0.42, "b_us_per_km": 2.2, "rate_mva": 450.0},
-        110.0: {"r_ohm_per_km": 0.10, "x_ohm_per_km": 0.45, "b_us_per_km": 2.0, "rate_mva": 350.0},
-        33.0: {"r_ohm_per_km": 0.25, "x_ohm_per_km": 0.35, "b_us_per_km": 1.2, "rate_mva": 90.0},
-    },
-    "cable": {
-        400.0: {"r_ohm_per_km": 0.018, "x_ohm_per_km": 0.12, "b_us_per_km": 38.0, "rate_mva": 1400.0},
-        275.0: {"r_ohm_per_km": 0.023, "x_ohm_per_km": 0.13, "b_us_per_km": 32.0, "rate_mva": 900.0},
-        220.0: {"r_ohm_per_km": 0.03, "x_ohm_per_km": 0.14, "b_us_per_km": 26.0, "rate_mva": 700.0},
-        132.0: {"r_ohm_per_km": 0.055, "x_ohm_per_km": 0.16, "b_us_per_km": 18.0, "rate_mva": 300.0},
-        110.0: {"r_ohm_per_km": 0.07, "x_ohm_per_km": 0.18, "b_us_per_km": 15.0, "rate_mva": 250.0},
-        33.0: {"r_ohm_per_km": 0.20, "x_ohm_per_km": 0.20, "b_us_per_km": 8.0, "rate_mva": 75.0},
-    },
+OVERHEAD_LINE_DEFAULTS = {
+    400.0: {"r_ohm_per_km": 0.028, "x_ohm_per_km": 0.32, "b_us_per_km": 3.6, "rate_mva": 1800.0},
+    275.0: {"r_ohm_per_km": 0.035, "x_ohm_per_km": 0.34, "b_us_per_km": 3.2, "rate_mva": 1200.0},
+    220.0: {"r_ohm_per_km": 0.045, "x_ohm_per_km": 0.38, "b_us_per_km": 2.8, "rate_mva": 900.0},
+    132.0: {"r_ohm_per_km": 0.08, "x_ohm_per_km": 0.42, "b_us_per_km": 2.2, "rate_mva": 450.0},
+    110.0: {"r_ohm_per_km": 0.10, "x_ohm_per_km": 0.45, "b_us_per_km": 2.0, "rate_mva": 350.0},
+    33.0: {"r_ohm_per_km": 0.25, "x_ohm_per_km": 0.35, "b_us_per_km": 1.2, "rate_mva": 90.0},
+}
+UNDERGROUND_CABLE_DEFAULTS = {
+    400.0: {"r_ohm_per_km": 0.018, "x_ohm_per_km": 0.12, "b_us_per_km": 38.0, "rate_mva": 1400.0},
+    275.0: {"r_ohm_per_km": 0.023, "x_ohm_per_km": 0.13, "b_us_per_km": 32.0, "rate_mva": 900.0},
+    220.0: {"r_ohm_per_km": 0.03, "x_ohm_per_km": 0.14, "b_us_per_km": 26.0, "rate_mva": 700.0},
+    132.0: {"r_ohm_per_km": 0.055, "x_ohm_per_km": 0.16, "b_us_per_km": 18.0, "rate_mva": 300.0},
+    110.0: {"r_ohm_per_km": 0.07, "x_ohm_per_km": 0.18, "b_us_per_km": 15.0, "rate_mva": 250.0},
+    33.0: {"r_ohm_per_km": 0.20, "x_ohm_per_km": 0.20, "b_us_per_km": 8.0, "rate_mva": 75.0},
+}
+BRANCH_PARAMETER_TABLES = {
+    "line": OVERHEAD_LINE_DEFAULTS,
+    "minor_line": OVERHEAD_LINE_DEFAULTS,
+    "cable": UNDERGROUND_CABLE_DEFAULTS,
+}
+TRANSFORMER_DEFAULTS = {
+    "autotransformer": {"br_r": 0.005, "br_x": 0.08},
+    "two_winding": {"br_r": 0.005, "br_x": 0.1},
+}
+GENERATOR_FUEL_DEFAULTS = {
+    "coal": {"cost": [0.012, 26.0, 0.0], "cost_class": "thermal_coal", "pmin_fraction": 0.0, "power_factor": 0.86},
+    "gas": {"cost": [0.01, 22.0, 0.0], "cost_class": "thermal_gas", "pmin_fraction": 0.0, "power_factor": 0.86},
+    "nuclear": {"cost": [0.004, 12.0, 0.0], "cost_class": "low_variable_cost_import_or_nuclear", "pmin_fraction": 0.0, "power_factor": 0.9},
+    "solar": {"cost": [0.0, 2.0, 0.0], "cost_class": "low_variable_cost_renewable", "pmin_fraction": 0.0, "power_factor": 0.95},
+    "wind": {"cost": [0.0, 2.0, 0.0], "cost_class": "low_variable_cost_renewable", "pmin_fraction": 0.0, "power_factor": 0.95},
+    "waste": {"cost": [0.006, 18.0, 0.0], "cost_class": "waste_to_energy", "pmin_fraction": 0.0, "power_factor": 0.86},
+    "unknown": {"cost": [0.01, 24.0, 0.0], "cost_class": "generic_dispatchable", "pmin_fraction": 0.0, "power_factor": 0.86},
+}
+EQUIVALENT_GENERATOR_DEFAULTS = {
+    "clp": {"cost": [0.01, 20.0, 0.0], "cost_class": "territory_equivalent_import_or_local_supply", "pmin_fraction": 0.0, "power_factor": 0.86},
+    "hk-electric": {"cost": [0.01, 24.0, 0.0], "cost_class": "island_local_supply_equivalent", "pmin_fraction": 0.0, "power_factor": 0.86},
+    "default": {"cost": [0.01, 30.0, 0.0], "cost_class": "generic_capacity_equivalent", "pmin_fraction": 0.0, "power_factor": 0.86},
 }
 
 
@@ -254,11 +278,14 @@ def _nearest_bus(
 
 def _branch_defaults(power: str, voltage_kv: float | None) -> dict[str, Any]:
     if voltage_kv is None:
-        return {"r_ohm_per_km": None, "x_ohm_per_km": None, "rate_mva": None}
-    table = VOLTAGE_DEFAULTS["cable" if power == "cable" else "line"]
+        return {"r_ohm_per_km": None, "x_ohm_per_km": None, "rate_mva": None, "parameter_table": None}
+    table_name = "underground_cable_defaults" if power == "cable" else "overhead_line_defaults"
+    table = BRANCH_PARAMETER_TABLES.get(power, OVERHEAD_LINE_DEFAULTS)
     nearest = min(table, key=lambda candidate: abs(candidate - voltage_kv))
     defaults = dict(table[nearest])
     defaults["matched_voltage_kv"] = nearest
+    defaults["parameter_table"] = table_name
+    defaults["parameter_source"] = "lookup_table"
     return defaults
 
 
@@ -463,7 +490,7 @@ def build_topology_preview(
             "demand_snapshot_label": snapshot["label"],
             "load_factor": snapshot["load_factor"],
             "demand_allocation_method": "voltage_weighted_substation_split",
-            "load_power_factor": 0.95,
+            "load_power_factor": LOAD_DEFAULTS["power_factor"],
             "include_hk_interties": include_hk_interties,
             "hk_intertie_derate": hk_intertie_derate,
             "min_voltage_kv": min_voltage_kv,
@@ -606,7 +633,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "pg": 0.0,
             "qg": 0.0,
             "pmax": round(generator["pmax_mw"] / BASE_MVA, 6),
-            "pmin": 0.0,
+            "pmin": round(generator["pmax_mw"] * (generator.get("pmin_fraction") or 0.0) / BASE_MVA, 6),
             "qmax": round(generator["pmax_mw"] * 0.6 / BASE_MVA, 6),
             "qmin": round(-generator["pmax_mw"] * 0.6 / BASE_MVA, 6),
             "vg": 1.0,
@@ -665,6 +692,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "synthetic_branch_count": sum(1 for branch in branches if _is_synthetic_branch(branch)),
             "inferred_transformer_branch_count": sum(1 for branch in branch_dict.values() if branch.get("transformer")),
             "voltage_inference": voltage_inference,
+            "parameter_lookup_tables": _parameter_lookup_metadata(),
             "reference_bus_count": len(reference_bus_ids),
             "total_pd_mw": round(sum(load["pd_mw"] for load in loads), 3),
             "total_tagged_pmax_mw": round(sum(gen["pmax_mw"] for gen in tagged_generators), 3),
@@ -1142,6 +1170,7 @@ def _powermodels_branch(
         charging_pu = _branch_charging_pu(defaults, length_km, z_base_ohm)
         transformer = False
         parameter_source = branch.get("provenance")
+        transformer_parameter_table = None
         tap = 1.0
     else:
         transformer_defaults = _transformer_defaults(transformer_info["high_kv"], transformer_info["low_kv"])
@@ -1150,6 +1179,7 @@ def _powermodels_branch(
         charging_pu = 0.0
         transformer = True
         parameter_source = transformer_defaults["parameter_source"]
+        transformer_parameter_table = transformer_defaults["parameter_table"]
         tap = 1.0
 
     return {
@@ -1175,6 +1205,7 @@ def _powermodels_branch(
         "provenance": branch.get("provenance"),
         "confidence": branch.get("confidence"),
         "parameter_source": parameter_source,
+        "parameter_table": transformer_parameter_table if transformer else defaults.get("parameter_table"),
         "matched_voltage_kv": defaults.get("matched_voltage_kv"),
         "b_us_per_km": defaults.get("b_us_per_km"),
         "length_km": length_km,
@@ -1223,11 +1254,13 @@ def _inferred_transformer_info(
 
 def _transformer_defaults(high_kv: float, low_kv: float) -> dict[str, Any]:
     ratio = high_kv / low_kv if low_kv else 1.0
-    base_x = 0.08 if ratio < 3.0 else 0.1
+    table_name = "autotransformer" if ratio < 3.0 else "two_winding"
+    defaults = TRANSFORMER_DEFAULTS[table_name]
     return {
-        "br_r": 0.005,
-        "br_x": round(base_x, 6),
+        "br_r": defaults["br_r"],
+        "br_x": defaults["br_x"],
         "parameter_source": "inferred_transformer_voltage_pair_default",
+        "parameter_table": f"transformer_{table_name}_defaults",
     }
 
 
@@ -1303,6 +1336,8 @@ def _hk_intertie_branches(
                 "b_us_per_km": 18.0,
                 "rate_mva": round(HK_INTERTIE_RATE_MVA * derate, 3),
                 "matched_voltage_kv": voltage_kv,
+                "parameter_table": "underground_cable_defaults",
+                "parameter_source": "lookup_table",
             },
             "endpoint_quality": [
                 {"snap": "synthetic_public_intertie", "bus_id": clp_bus["id"]},
@@ -1491,6 +1526,7 @@ def _tagged_generators(generators: Iterable[Mapping[str, Any]]) -> list[dict[str
         pmax_mw = generator.get("pmax_mw")
         if pmax_mw is None:
             continue
+        fuel_defaults = GENERATOR_FUEL_DEFAULTS[_normal_generator_source(generator.get("source"))]
         tagged.append(
             {
                 "id": generator["id"],
@@ -1499,8 +1535,10 @@ def _tagged_generators(generators: Iterable[Mapping[str, Any]]) -> list[dict[str
                 "pmax_mw": float(pmax_mw),
                 "energy_source": _normal_generator_source(generator.get("source")),
                 "resource_type": "local_osm_generator",
-                "cost_class": _generator_cost_class(generator.get("source")),
-                "cost": _generator_cost(generator.get("source")),
+                "cost_class": fuel_defaults["cost_class"],
+                "cost": list(fuel_defaults["cost"]),
+                "pmin_fraction": fuel_defaults["pmin_fraction"],
+                "power_factor": fuel_defaults["power_factor"],
                 "provenance": generator.get("provenance"),
                 "confidence": generator.get("confidence"),
             }
@@ -1509,18 +1547,7 @@ def _tagged_generators(generators: Iterable[Mapping[str, Any]]) -> list[dict[str
 
 
 def _generator_cost(source: Any) -> list[float]:
-    source_text = str(source or "").lower()
-    if "coal" in source_text:
-        return [0.012, 26.0, 0.0]
-    if "gas" in source_text:
-        return [0.01, 22.0, 0.0]
-    if "nuclear" in source_text:
-        return [0.004, 12.0, 0.0]
-    if "solar" in source_text or "wind" in source_text:
-        return [0.0, 2.0, 0.0]
-    if "waste" in source_text:
-        return [0.006, 18.0, 0.0]
-    return [0.01, 24.0, 0.0]
+    return list(GENERATOR_FUEL_DEFAULTS[_normal_generator_source(source)]["cost"])
 
 
 def _normal_generator_source(source: Any) -> str:
@@ -1532,26 +1559,15 @@ def _normal_generator_source(source: Any) -> str:
 
 
 def _generator_cost_class(source: Any) -> str:
-    source_name = _normal_generator_source(source)
-    if source_name in {"solar", "wind"}:
-        return "low_variable_cost_renewable"
-    if source_name == "nuclear":
-        return "low_variable_cost_import_or_nuclear"
-    if source_name == "gas":
-        return "thermal_gas"
-    if source_name == "coal":
-        return "thermal_coal"
-    if source_name == "waste":
-        return "waste_to_energy"
-    return "generic_dispatchable"
+    return str(GENERATOR_FUEL_DEFAULTS[_normal_generator_source(source)]["cost_class"])
 
 
 def _equivalent_generator_cost_class(territory: str) -> str:
-    if territory == "clp":
-        return "territory_equivalent_import_or_local_supply"
-    if territory == "hk-electric":
-        return "island_local_supply_equivalent"
-    return "generic_capacity_equivalent"
+    return str(_equivalent_generator_defaults(territory)["cost_class"])
+
+
+def _equivalent_generator_defaults(territory: str) -> Mapping[str, Any]:
+    return EQUIVALENT_GENERATOR_DEFAULTS.get(territory, EQUIVALENT_GENERATOR_DEFAULTS["default"])
 
 
 def _equivalent_generators(
@@ -1581,6 +1597,7 @@ def _equivalent_generators(
         if bus is None:
             continue
         pmax_mw = max(peak_equivalent_pd_mw * 1.25, 100.0)
+        defaults = _equivalent_generator_defaults(territory)
         generators.append(
             {
                 "id": f"equivalent_gen:{territory}:island:{index}",
@@ -1589,8 +1606,10 @@ def _equivalent_generators(
                 "pmax_mw": pmax_mw,
                 "energy_source": "equivalent_import_or_local_supply",
                 "resource_type": "territory_capacity_equivalent",
-                "cost_class": _equivalent_generator_cost_class(territory),
-                "cost": [0.01, 20.0 if territory == "clp" else 24.0, 0.0],
+                "cost_class": defaults["cost_class"],
+                "cost": list(defaults["cost"]),
+                "pmin_fraction": defaults["pmin_fraction"],
+                "power_factor": defaults["power_factor"],
                 "provenance": "public_peak_demand_capacity_equivalent",
                 "confidence": 0.35,
             }
@@ -1598,6 +1617,7 @@ def _equivalent_generators(
 
     if not generators and buses:
         bus = max(buses, key=lambda candidate: candidate.get("base_kv") or 0.0)
+        defaults = EQUIVALENT_GENERATOR_DEFAULTS["default"]
         generators.append(
             {
                 "id": "equivalent_gen:unassigned",
@@ -1606,8 +1626,10 @@ def _equivalent_generators(
                 "pmax_mw": 100.0,
                 "energy_source": "fallback_equivalent",
                 "resource_type": "fallback_capacity_equivalent",
-                "cost_class": "fallback",
-                "cost": [0.01, 30.0, 0.0],
+                "cost_class": defaults["cost_class"],
+                "cost": list(defaults["cost"]),
+                "pmin_fraction": defaults["pmin_fraction"],
+                "power_factor": defaults["power_factor"],
                 "provenance": "fallback_capacity_equivalent",
                 "confidence": 0.2,
             }
@@ -1746,8 +1768,20 @@ def _load_allocation_weight(bus: Mapping[str, Any]) -> float:
     return 0.5
 
 
-def _reactive_mvar(pd_mw: float, *, power_factor: float = 0.95) -> float:
+def _reactive_mvar(pd_mw: float, *, power_factor: float = LOAD_DEFAULTS["power_factor"]) -> float:
     return pd_mw * math.tan(math.acos(power_factor))
+
+
+def _parameter_lookup_metadata() -> dict[str, Any]:
+    return {
+        "overhead_line_voltage_kv": sorted(OVERHEAD_LINE_DEFAULTS),
+        "underground_cable_voltage_kv": sorted(UNDERGROUND_CABLE_DEFAULTS),
+        "transformer_defaults": sorted(TRANSFORMER_DEFAULTS),
+        "generator_fuel_defaults": sorted(GENERATOR_FUEL_DEFAULTS),
+        "equivalent_generator_defaults": sorted(EQUIVALENT_GENERATOR_DEFAULTS),
+        "load_power_factor": LOAD_DEFAULTS["power_factor"],
+        "baseMVA": BASE_MVA,
+    }
 
 
 def _quality_summary(
