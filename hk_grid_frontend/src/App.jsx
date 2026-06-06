@@ -5,7 +5,7 @@ import './App.css'
 
 const API = '/api'
 const SCENARIOS = [
-  { id: 'typhoon_wind_loss',  label: 'Typhoon Wind Loss' },
+  { id: 'combined_stress',    label: 'Typhoon Wind Loss' },
   { id: 'coal_plant_trip',    label: 'Coal Plant Trip' },
   { id: 'mainland_disconnect', label: 'Mainland Disconnect' },
 ]
@@ -15,7 +15,7 @@ export default function App() {
   const [simData,    setSimData]    = useState(null)
   const [loading,    setLoading]    = useState(false)
   const [error,      setError]      = useState(null)
-  const [scenario,   setScenario]   = useState('typhoon_wind_loss')
+  const [scenario,   setScenario]   = useState('combined_stress')
   const [frameIdx,   setFrameIdx]   = useState(0)
   const [playing,    setPlaying]    = useState(false)
   const [duration,   setDuration]   = useState(400)
