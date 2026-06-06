@@ -113,6 +113,9 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert "export_gridsfm_data.jl" in handoff_script
     assert "solve_pyg_json.jl" in handoff_script
     assert "gen_perturbed_data.jl" in handoff_script
+    assert "Solver did not produce solvable file" in handoff_script
+    assert "GridSFM exporter did not produce PyG file" in handoff_script
+    assert "Scenario generator did not produce output directory" in handoff_script
     assert grids_solvable_path.read_text(encoding="utf-8").splitlines() == [
         f"{output_dir / 'hong_kong_16h_model.solvable.json'} 3",
         f"{output_dir / 'hong_kong_04h_model.solvable.json'} 3",

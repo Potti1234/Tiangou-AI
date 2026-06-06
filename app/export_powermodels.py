@@ -197,7 +197,9 @@ def _write_solver_handoff(
             [
                 f'if (-not (Test-Path "{raw_path}")) {{ throw "Missing raw PowerModels file: {raw_path}" }}',
                 f'julia --project="$SolverPipeline" "$SolverPipeline\\solve_topo_json.jl" "{raw_path}" "{solvable_path}"',
+                f'if (-not (Test-Path "{solvable_path}")) {{ throw "Solver did not produce solvable file: {solvable_path}" }}',
                 f'julia --project="$SolverPipeline" "$SolverPipeline\\export_gridsfm_data.jl" "{solvable_path}" "{pyg_path}"',
+                f'if (-not (Test-Path "{pyg_path}")) {{ throw "GridSFM exporter did not produce PyG file: {pyg_path}" }}',
                 f'julia --project="$SolverPipeline" "$SolverPipeline\\solve_pyg_json.jl" "{solvable_path}" "{pyg_path}"',
             ]
         )
@@ -205,6 +207,7 @@ def _write_solver_handoff(
         [
             "",
             f'julia --project="$SolverPipeline" "$SolverPipeline\\gen_perturbed_data.jl" "{grids_solvable_path}" 1 "{output_dir / "scenarios"}"',
+            f'if (-not (Test-Path "{output_dir / "scenarios"}")) {{ throw "Scenario generator did not produce output directory: {output_dir / "scenarios"}" }}',
             "",
         ]
     )
