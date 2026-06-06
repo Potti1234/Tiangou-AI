@@ -89,6 +89,13 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert case["_metadata"]["reference_bus_count"] == 2
     assert case["_metadata"]["demand_allocation_method"] == "voltage_weighted_substation_split"
     assert case["_metadata"]["load_power_factor"] == 0.95
+    assert case["_metadata"]["component_count"] == 2
+    assert case["_metadata"]["load_bearing_component_count"] == 2
+    assert case["_metadata"]["largest_component_bus_count"] == 2
+    assert case["_metadata"]["largest_component_bus_share"] == 0.5
+    assert case["_metadata"]["largest_component_load_share"] > 0.75
+    assert case["_metadata"]["cleanup_summary"]["component_count"] == 2
+    assert case["_metadata"]["cleanup_summary"]["largest_component_load_mw"] == case["_metadata"]["largest_component_load_mw"]
 
     assert sorted(case["bus"]) == ["1", "2", "3", "4"]
     assert all(bus["index"] == bus["bus_i"] for bus in case["bus"].values())
@@ -463,7 +470,10 @@ def test_powermodels_preview_drops_passive_components_from_solver_case() -> None
 
     assert topology["metadata"]["bus_count"] == 5
     assert case["_metadata"]["bus_count"] == 4
+    assert case["_metadata"]["raw_bus_count"] == 5
+    assert case["_metadata"]["retained_bus_count"] == 4
     assert case["_metadata"]["dropped_passive_bus_count"] == 1
+    assert case["_metadata"]["cleanup_summary"]["dropped_passive_bus_count"] == 1
     assert case["_metadata"]["voltage_inference"]["unresolved"] == 0
     assert all(bus["source_id"] != "osm:node:80" for bus in case["bus"].values())
 

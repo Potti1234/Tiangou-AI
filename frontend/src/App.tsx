@@ -377,6 +377,8 @@ function DiagnosticsPanel({
             <MetadataRow label="Total demand MW" value={metric(summary, "total_pd_mw")} />
             <MetadataRow label="Total Pmax MW" value={metric(summary, "total_pmax_mw")} />
             <MetadataRow label="Island count" value={metric(summary, "island_count")} />
+            <MetadataRow label="Load components" value={metric(summary, "load_bearing_component_count")} />
+            <MetadataRow label="Largest bus share" value={summary?.solver_metadata.largest_component_bus_share} />
             <MetadataRow label="Severe mismatches" value={metric(summary, "severe_branch_voltage_mismatch_count")} />
           </div>
         </section>

@@ -650,6 +650,8 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "cost_class": generator.get("cost_class"),
         }
 
+    component_metadata = _solver_component_metadata(bus_dict, branch_dict, load_dict, gen_dict)
+
     return {
         "name": "hong_kong_osm_preview",
         "source_version": "tiangou.powermodels_preview.v1",
@@ -682,11 +684,42 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "branch_count": len(branch_dict),
             "load_count": len(load_dict),
             "gen_count": len(gen_dict),
+            "raw_bus_count": len(raw_buses),
+            "raw_branch_count": len(raw_branches),
+            "retained_bus_count": len(buses),
+            "retained_branch_count": len(branches),
             "dropped_passive_bus_count": len(raw_buses) - len(buses),
             "dropped_passive_branch_count": len(raw_branches) - len(branches),
             "dropped_no_load_generation_island_count": active_selection["dropped_no_load_generation_island_count"],
             "dropped_no_load_generation_bus_count": active_selection["dropped_no_load_generation_bus_count"],
             "dropped_no_load_generation_pmax_mw": active_selection["dropped_no_load_generation_pmax_mw"],
+            "component_count": component_metadata["component_count"],
+            "load_bearing_component_count": component_metadata["load_bearing_component_count"],
+            "largest_component_bus_count": component_metadata["largest_component_bus_count"],
+            "largest_component_bus_share": component_metadata["largest_component_bus_share"],
+            "largest_component_load_mw": component_metadata["largest_component_load_mw"],
+            "largest_component_load_share": component_metadata["largest_component_load_share"],
+            "largest_component_pmax_mw": component_metadata["largest_component_pmax_mw"],
+            "largest_component_pmax_share": component_metadata["largest_component_pmax_share"],
+            "cleanup_summary": {
+                "raw_bus_count": len(raw_buses),
+                "raw_branch_count": len(raw_branches),
+                "retained_bus_count": len(buses),
+                "retained_branch_count": len(branches),
+                "dropped_passive_bus_count": len(raw_buses) - len(buses),
+                "dropped_passive_branch_count": len(raw_branches) - len(branches),
+                "dropped_no_load_generation_island_count": active_selection["dropped_no_load_generation_island_count"],
+                "dropped_no_load_generation_bus_count": active_selection["dropped_no_load_generation_bus_count"],
+                "dropped_no_load_generation_pmax_mw": active_selection["dropped_no_load_generation_pmax_mw"],
+                "component_count": component_metadata["component_count"],
+                "load_bearing_component_count": component_metadata["load_bearing_component_count"],
+                "largest_component_bus_count": component_metadata["largest_component_bus_count"],
+                "largest_component_bus_share": component_metadata["largest_component_bus_share"],
+                "largest_component_load_mw": component_metadata["largest_component_load_mw"],
+                "largest_component_load_share": component_metadata["largest_component_load_share"],
+                "largest_component_pmax_mw": component_metadata["largest_component_pmax_mw"],
+                "largest_component_pmax_share": component_metadata["largest_component_pmax_share"],
+            },
             "tagged_gen_count": len(tagged_generators),
             "equivalent_gen_count": len(equivalent_generators),
             "synthetic_branch_count": sum(1 for branch in branches if _is_synthetic_branch(branch)),
@@ -709,6 +742,39 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
                 "Equivalent generators represent territory-level local supply or imports; run relaxation and validation before optimization.",
             ],
         },
+    }
+
+
+def _solver_component_metadata(
+    buses: Mapping[str, Any],
+    branches: Mapping[str, Any],
+    loads: Mapping[str, Any],
+    generators: Mapping[str, Any],
+) -> dict[str, Any]:
+    island_report = _case_island_report(buses, branches, loads, generators)
+    islands = island_report["islands"]
+    total_buses = len(buses)
+    total_load_mw = sum(float(island["pd_mw"]) for island in islands)
+    total_pmax_mw = sum(float(island["pmax_mw"]) for island in islands)
+    largest = max(
+        islands,
+        key=lambda island: (
+            float(island["pd_mw"]),
+            int(island["bus_count"]),
+            float(island["pmax_mw"]),
+        ),
+        default={"bus_count": 0, "pd_mw": 0.0, "pmax_mw": 0.0},
+    )
+
+    return {
+        "component_count": island_report["island_count"],
+        "load_bearing_component_count": sum(1 for island in islands if float(island["pd_mw"]) > 0.0),
+        "largest_component_bus_count": int(largest["bus_count"]),
+        "largest_component_bus_share": round(int(largest["bus_count"]) / total_buses, 6) if total_buses else 0.0,
+        "largest_component_load_mw": round(float(largest["pd_mw"]), 3),
+        "largest_component_load_share": round(float(largest["pd_mw"]) / total_load_mw, 6) if total_load_mw else 0.0,
+        "largest_component_pmax_mw": round(float(largest["pmax_mw"]), 3),
+        "largest_component_pmax_share": round(float(largest["pmax_mw"]) / total_pmax_mw, 6) if total_pmax_mw else 0.0,
     }
 
 
@@ -888,6 +954,7 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
         )
 
     island_report = _case_island_report(buses, branches, loads, generators)
+    component_metadata = _solver_component_metadata(buses, branches, loads, generators)
     quality_metrics = _case_quality_metrics(buses, branches, loads, generators)
     voltage_mismatches = _branch_voltage_mismatches(buses, branches)
     severe_voltage_mismatches = [
@@ -953,6 +1020,13 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
             "total_pd_mw": round(total_pd * BASE_MVA, 3),
             "total_pmax_mw": round(total_pmax * BASE_MVA, 3),
             "island_count": island_report["island_count"],
+            "load_bearing_component_count": component_metadata["load_bearing_component_count"],
+            "largest_component_bus_count": component_metadata["largest_component_bus_count"],
+            "largest_component_bus_share": component_metadata["largest_component_bus_share"],
+            "largest_component_load_mw": component_metadata["largest_component_load_mw"],
+            "largest_component_load_share": component_metadata["largest_component_load_share"],
+            "largest_component_pmax_mw": component_metadata["largest_component_pmax_mw"],
+            "largest_component_pmax_share": component_metadata["largest_component_pmax_share"],
             "low_confidence_counts": quality_metrics["low_confidence_counts"],
             "provenance_summary": quality_metrics["provenance_summary"],
             "branch_voltage_mismatch_count": len(voltage_mismatches),
@@ -978,12 +1052,16 @@ def _case_island_report(
             adjacency[t_bus].add(f_bus)
 
     load_buses: dict[int, int] = {}
+    load_pd_by_bus: dict[int, float] = {}
     for load in loads.values():
         load_buses[load["load_bus"]] = load_buses.get(load["load_bus"], 0) + 1
+        load_pd_by_bus[load["load_bus"]] = load_pd_by_bus.get(load["load_bus"], 0.0) + float(load.get("pd") or 0.0) * BASE_MVA
 
     gen_buses: dict[int, int] = {}
+    gen_pmax_by_bus: dict[int, float] = {}
     for generator in generators.values():
         gen_buses[generator["gen_bus"]] = gen_buses.get(generator["gen_bus"], 0) + 1
+        gen_pmax_by_bus[generator["gen_bus"]] = gen_pmax_by_bus.get(generator["gen_bus"], 0.0) + float(generator.get("pmax") or 0.0) * BASE_MVA
 
     reference_buses = {
         int(bus["bus_i"])
@@ -1011,6 +1089,8 @@ def _case_island_report(
                 "bus_count": len(component),
                 "load_count": sum(load_buses.get(bus, 0) for bus in component),
                 "gen_count": sum(gen_buses.get(bus, 0) for bus in component),
+                "pd_mw": round(sum(load_pd_by_bus.get(bus, 0.0) for bus in component), 3),
+                "pmax_mw": round(sum(gen_pmax_by_bus.get(bus, 0.0) for bus in component), 3),
                 "reference_bus_count": sum(1 for bus in component if bus in reference_buses),
             }
         )
