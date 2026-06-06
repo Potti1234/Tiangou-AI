@@ -41,20 +41,20 @@ BASE_MVA = 100.0
 
 VOLTAGE_DEFAULTS = {
     "line": {
-        400.0: {"r_ohm_per_km": 0.028, "x_ohm_per_km": 0.32, "rate_mva": 1800.0},
-        275.0: {"r_ohm_per_km": 0.035, "x_ohm_per_km": 0.34, "rate_mva": 1200.0},
-        220.0: {"r_ohm_per_km": 0.045, "x_ohm_per_km": 0.38, "rate_mva": 900.0},
-        132.0: {"r_ohm_per_km": 0.08, "x_ohm_per_km": 0.42, "rate_mva": 450.0},
-        110.0: {"r_ohm_per_km": 0.10, "x_ohm_per_km": 0.45, "rate_mva": 350.0},
-        33.0: {"r_ohm_per_km": 0.25, "x_ohm_per_km": 0.35, "rate_mva": 90.0},
+        400.0: {"r_ohm_per_km": 0.028, "x_ohm_per_km": 0.32, "b_us_per_km": 3.6, "rate_mva": 1800.0},
+        275.0: {"r_ohm_per_km": 0.035, "x_ohm_per_km": 0.34, "b_us_per_km": 3.2, "rate_mva": 1200.0},
+        220.0: {"r_ohm_per_km": 0.045, "x_ohm_per_km": 0.38, "b_us_per_km": 2.8, "rate_mva": 900.0},
+        132.0: {"r_ohm_per_km": 0.08, "x_ohm_per_km": 0.42, "b_us_per_km": 2.2, "rate_mva": 450.0},
+        110.0: {"r_ohm_per_km": 0.10, "x_ohm_per_km": 0.45, "b_us_per_km": 2.0, "rate_mva": 350.0},
+        33.0: {"r_ohm_per_km": 0.25, "x_ohm_per_km": 0.35, "b_us_per_km": 1.2, "rate_mva": 90.0},
     },
     "cable": {
-        400.0: {"r_ohm_per_km": 0.018, "x_ohm_per_km": 0.12, "rate_mva": 1400.0},
-        275.0: {"r_ohm_per_km": 0.023, "x_ohm_per_km": 0.13, "rate_mva": 900.0},
-        220.0: {"r_ohm_per_km": 0.03, "x_ohm_per_km": 0.14, "rate_mva": 700.0},
-        132.0: {"r_ohm_per_km": 0.055, "x_ohm_per_km": 0.16, "rate_mva": 300.0},
-        110.0: {"r_ohm_per_km": 0.07, "x_ohm_per_km": 0.18, "rate_mva": 250.0},
-        33.0: {"r_ohm_per_km": 0.20, "x_ohm_per_km": 0.20, "rate_mva": 75.0},
+        400.0: {"r_ohm_per_km": 0.018, "x_ohm_per_km": 0.12, "b_us_per_km": 38.0, "rate_mva": 1400.0},
+        275.0: {"r_ohm_per_km": 0.023, "x_ohm_per_km": 0.13, "b_us_per_km": 32.0, "rate_mva": 900.0},
+        220.0: {"r_ohm_per_km": 0.03, "x_ohm_per_km": 0.14, "b_us_per_km": 26.0, "rate_mva": 700.0},
+        132.0: {"r_ohm_per_km": 0.055, "x_ohm_per_km": 0.16, "b_us_per_km": 18.0, "rate_mva": 300.0},
+        110.0: {"r_ohm_per_km": 0.07, "x_ohm_per_km": 0.18, "b_us_per_km": 15.0, "rate_mva": 250.0},
+        33.0: {"r_ohm_per_km": 0.20, "x_ohm_per_km": 0.20, "b_us_per_km": 8.0, "rate_mva": 75.0},
     },
 }
 
@@ -904,6 +904,7 @@ def _powermodels_branch(
     r_ohm = (defaults.get("r_ohm_per_km") or 0.08) * length_km
     x_ohm = (defaults.get("x_ohm_per_km") or 0.42) * length_km
     z_base_ohm = (voltage_kv * voltage_kv) / BASE_MVA
+    charging_pu = _branch_charging_pu(defaults, length_km, z_base_ohm)
 
     return {
         "index": index,
@@ -911,8 +912,8 @@ def _powermodels_branch(
         "t_bus": int(bus_id_map[str(branch["to_bus_id"])]),
         "br_r": round(max(r_ohm / z_base_ohm, 0.00001), 8),
         "br_x": round(max(x_ohm / z_base_ohm, 0.00001), 8),
-        "b_fr": 0.0,
-        "b_to": 0.0,
+        "b_fr": charging_pu,
+        "b_to": charging_pu,
         "rate_a": defaults.get("rate_mva") or 100.0,
         "rate_b": defaults.get("rate_mva") or 100.0,
         "rate_c": defaults.get("rate_mva") or 100.0,
@@ -927,8 +928,17 @@ def _powermodels_branch(
         "confidence": branch.get("confidence"),
         "parameter_source": branch.get("provenance"),
         "matched_voltage_kv": defaults.get("matched_voltage_kv"),
+        "b_us_per_km": defaults.get("b_us_per_km"),
         "length_km": length_km,
     }
+
+
+def _branch_charging_pu(defaults: Mapping[str, Any], length_km: float, z_base_ohm: float) -> float:
+    b_us_per_km = defaults.get("b_us_per_km")
+    if b_us_per_km is None:
+        return 0.0
+    total_b_siemens = float(b_us_per_km) * 1e-6 * length_km
+    return round(max(total_b_siemens * z_base_ohm / 2.0, 0.0), 8)
 
 
 def _validate_derate(derate: float) -> None:
@@ -983,6 +993,7 @@ def _hk_intertie_branches(
             "parameter_defaults": {
                 "r_ohm_per_km": 0.055,
                 "x_ohm_per_km": 0.16,
+                "b_us_per_km": 18.0,
                 "rate_mva": round(HK_INTERTIE_RATE_MVA * derate, 3),
                 "matched_voltage_kv": 132.0,
             },

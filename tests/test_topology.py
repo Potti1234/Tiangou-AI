@@ -67,6 +67,9 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert all(bus["type"] == bus["bus_type"] for bus in case["bus"].values())
     assert all(branch["br_r"] > 0 for branch in case["branch"].values())
     assert all(branch["br_x"] > 0 for branch in case["branch"].values())
+    assert all(branch["b_fr"] > 0 for branch in case["branch"].values())
+    assert all(branch["b_to"] > 0 for branch in case["branch"].values())
+    assert all(branch["b_us_per_km"] > 0 for branch in case["branch"].values())
     assert all(generator["model"] == 2 for generator in case["gen"].values())
     assert all(generator["ncost"] == 3 for generator in case["gen"].values())
     assert all(len(generator["cost"]) == 3 for generator in case["gen"].values())
@@ -207,6 +210,9 @@ def test_powermodels_preview_can_include_hk_intertie() -> None:
     assert topology["metadata"]["branch_count"] == 3
     assert intertie["provenance"] == "public_interconnection_capacity_equivalent"
     assert exported_intertie["rate_a"] == 720.0
+    assert exported_intertie["b_fr"] > 0
+    assert exported_intertie["b_to"] > 0
+    assert exported_intertie["b_us_per_km"] == 18.0
     assert exported_intertie["parameter_source"] == "public_interconnection_capacity_equivalent"
     assert exported_intertie["confidence"] == 0.5
     assert case["_metadata"]["provenance_summary"]["branch"]["public_interconnection_capacity_equivalent"] == 1
