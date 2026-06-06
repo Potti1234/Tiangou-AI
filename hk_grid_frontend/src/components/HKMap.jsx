@@ -30,7 +30,7 @@ const NODES = [
   { id: 'lamma',        label: 'Lamma PS',             x:  90, y: 310, type: 'coal'    },
   { id: 'solar',        label: 'HK Solar',             x: 370, y: 240, type: 'solar'   },
   { id: 'sc',           label: 'Stonecutters\nSC',     x: 245, y: 190, type: 'sc'      },
-  { id: 'bess',         label: 'Grid Battery\nBESS',   x: 310, y: 290, type: 'bess'    },
+  { id: 'bess',         label: 'Grid Battery\nBESS',   x: 480, y: 300, type: 'bess'    },
 ]
 
 const EDGES = [
