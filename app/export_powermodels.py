@@ -44,9 +44,44 @@ def export_powermodels_case(
     }
 
 
+def export_hong_kong_phase1_bundle(
+    *,
+    database_path: Path,
+    output_dir: Path,
+    snap_tolerance_km: float = 0.75,
+    include_hk_interties: bool = False,
+    allow_validation_errors: bool = False,
+) -> dict[str, Any]:
+    exports = []
+    for demand_snapshot, filename in (
+        ("peak_16h", "hong_kong_16h_model.json"),
+        ("overnight_04h", "hong_kong_04h_model.json"),
+    ):
+        exports.append(
+            export_powermodels_case(
+                database_path=database_path,
+                output_path=output_dir / filename,
+                region_key="hong-kong",
+                snap_tolerance_km=snap_tolerance_km,
+                demand_snapshot=demand_snapshot,
+                include_hk_interties=include_hk_interties,
+                allow_validation_errors=allow_validation_errors,
+            )
+        )
+
+    manifest = {
+        "region_key": "hong-kong",
+        "include_hk_interties": include_hk_interties,
+        "exports": exports,
+    }
+    manifest_path = output_dir / "hong_kong_phase1_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    return {**manifest, "manifest_path": str(manifest_path)}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Export an ingested OSM region as a PowerModels preview JSON.")
-    parser.add_argument("output_path", type=Path, help="Path for the generated PowerModels JSON.")
+    parser.add_argument("output_path", type=Path, help="Path for the generated PowerModels JSON, or an output directory with --hong-kong-phase1-bundle.")
     parser.add_argument("--database-path", type=Path, default=Path("data/tiangou.sqlite3"))
     parser.add_argument("--region-key", default="hong-kong")
     parser.add_argument("--snap-tolerance-km", type=float, default=0.75)
@@ -61,17 +96,31 @@ def main() -> None:
         action="store_true",
         help="Write the JSON even when structural validation reports errors.",
     )
+    parser.add_argument(
+        "--hong-kong-phase1-bundle",
+        action="store_true",
+        help="Write hong_kong_16h_model.json, hong_kong_04h_model.json, and a manifest into output_path.",
+    )
     args = parser.parse_args()
 
-    result = export_powermodels_case(
-        database_path=args.database_path,
-        output_path=args.output_path,
-        region_key=args.region_key,
-        snap_tolerance_km=args.snap_tolerance_km,
-        demand_snapshot=args.demand_snapshot,
-        include_hk_interties=args.include_hk_interties,
-        allow_validation_errors=args.allow_validation_errors,
-    )
+    if args.hong_kong_phase1_bundle:
+        result = export_hong_kong_phase1_bundle(
+            database_path=args.database_path,
+            output_dir=args.output_path,
+            snap_tolerance_km=args.snap_tolerance_km,
+            include_hk_interties=args.include_hk_interties,
+            allow_validation_errors=args.allow_validation_errors,
+        )
+    else:
+        result = export_powermodels_case(
+            database_path=args.database_path,
+            output_path=args.output_path,
+            region_key=args.region_key,
+            snap_tolerance_km=args.snap_tolerance_km,
+            demand_snapshot=args.demand_snapshot,
+            include_hk_interties=args.include_hk_interties,
+            allow_validation_errors=args.allow_validation_errors,
+        )
     print(json.dumps(result, indent=2, sort_keys=True))
 
 

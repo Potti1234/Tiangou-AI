@@ -3,7 +3,7 @@ import json
 import pytest
 
 from app.database import connect, init_db
-from app.export_powermodels import export_powermodels_case
+from app.export_powermodels import export_hong_kong_phase1_bundle, export_powermodels_case
 from app.repository import create_ingest_run, upsert_elements
 
 
@@ -42,6 +42,36 @@ def test_export_powermodels_case_writes_overnight_snapshot(tmp_path) -> None:
     assert payload["demand_snapshot"] == "overnight_04h"
     assert payload["_metadata"]["total_pd_mw"] == 4034.8
     assert payload["_metadata"]["total_equivalent_pmax_mw"] == 9170.0
+
+
+def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_path) -> None:
+    db_path = tmp_path / "grid.sqlite3"
+    output_dir = tmp_path / "processed"
+    _seed_grid(db_path)
+
+    result = export_hong_kong_phase1_bundle(
+        database_path=db_path,
+        output_dir=output_dir,
+        snap_tolerance_km=0.2,
+        include_hk_interties=True,
+    )
+
+    peak_path = output_dir / "hong_kong_16h_model.json"
+    overnight_path = output_dir / "hong_kong_04h_model.json"
+    manifest_path = output_dir / "hong_kong_phase1_manifest.json"
+    assert peak_path.exists()
+    assert overnight_path.exists()
+    assert manifest_path.exists()
+    assert result["include_hk_interties"] is True
+    assert len(result["exports"]) == 2
+
+    peak = json.loads(peak_path.read_text(encoding="utf-8"))
+    overnight = json.loads(overnight_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert peak["demand_snapshot"] == "peak_16h"
+    assert overnight["demand_snapshot"] == "overnight_04h"
+    assert peak["_metadata"]["include_hk_interties"] is True
+    assert manifest["exports"][0]["validation"]["status"] == "ok"
 
 
 def test_export_powermodels_case_blocks_validation_errors(tmp_path) -> None:

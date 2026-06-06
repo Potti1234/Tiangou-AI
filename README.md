@@ -82,4 +82,10 @@ Add the public 720 MVA CLP-HK Electric interconnection when building an optimiza
 python -m app.export_powermodels data/processed/hong_kong_16h_model.json --include-hk-interties
 ```
 
+Write both Phase 1 Hong Kong snapshots plus a manifest:
+
+```powershell
+python -m app.export_powermodels data/processed --hong-kong-phase1-bundle --include-hk-interties
+```
+
 This preview uses OSM geometry, voltage-class impedance defaults, public Hong Kong peak-demand anchors, and territory-level equivalent generators. Treat it as an upstream topology-builder artifact for the Julia relaxation/export pipeline, not as an operational grid model.
