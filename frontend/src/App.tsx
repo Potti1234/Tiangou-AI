@@ -422,10 +422,16 @@ function DiagnosticsPanel({
   const solverCalibration = unknownRecord(summary?.solver_metadata.calibration)
   const validationCalibration = unknownRecord(summary?.validation.metrics.calibration)
   const sectorGwh = numericRecord(solverCalibration.sector_gwh)
+  const inferredClpSectorGwh = numericRecord(solverCalibration.inferred_clp_sector_gwh)
   const endUseShares = numericRecord(solverCalibration.end_use_shares)
   const snapshotTotals = numericRecord(solverCalibration.snapshot_total_mw)
+  const clpSnapshotTotals = numericRecord(solverCalibration.clp_snapshot_total_mw)
   const provenanceShares = numericRecord(unknownRecord(validationCalibration.load_provenance_class_share))
   const hkTerritory = unknownRecord(validationCalibration.hk_electric_territory)
+  const officialTotal = unknownRecord(validationCalibration.official_total_source_energy)
+  const hkTotalSource = unknownRecord(solverCalibration.hk_total_sector_source)
+  const territoryValidation = unknownRecord(solverCalibration.territory_total_validation)
+  const officialHongKongGwh = officialTotal.official_gwh ?? territoryValidation.emsd_total_gwh
   const calibrationWarnings = Array.isArray(summary?.solver_metadata.calibration_warnings)
     ? summary.solver_metadata.calibration_warnings.filter((warning): warning is string => typeof warning === "string")
     : []
@@ -490,16 +496,26 @@ function DiagnosticsPanel({
           <div className="mt-2 rounded-[4px] border border-zinc-200 bg-white/70 px-2">
             <MetadataRow label="HK Electric source" value={solverCalibration.source_year} />
             <MetadataRow label="Source periods" value={Array.isArray(solverCalibration.source_periods) ? solverCalibration.source_periods.join(", ") : "n/a"} />
+            <MetadataRow label="Official HK GWh" value={officialHongKongGwh} />
             <MetadataRow label="Observed HKE GWh" value={solverCalibration.observed_hk_electric_total_gwh} />
+            <MetadataRow label="Inferred CLP GWh" value={solverCalibration.inferred_clp_total_gwh} />
             <MetadataRow label="Modeled HKE GWh" value={hkTerritory.modeled_gwh} />
             <MetadataRow label="HKE total error %" value={hkTerritory.error_pct} />
+            <MetadataRow label="Official total error %" value={officialTotal.error_pct} />
             <MetadataRow label="Cooling share" value={typeof endUseShares.air_conditioning === "number" ? `${formatNumber(endUseShares.air_conditioning * 100, 1)}%` : "n/a"} />
-            <MetadataRow label="Snapshot MW" value={snapshotTotals[summary?.solver_metadata.demand_snapshot as string] ?? summary?.solver_metadata.total_pd_mw} />
+            <MetadataRow label="HKE snapshot MW" value={snapshotTotals[summary?.solver_metadata.demand_snapshot as string]} />
+            <MetadataRow label="CLP snapshot MW" value={clpSnapshotTotals[summary?.solver_metadata.demand_snapshot as string]} />
+            <MetadataRow label="HK total source" value={typeof hkTotalSource.source === "string" ? hkTotalSource.source : "n/a"} />
+            <MetadataRow label="CLP method" value={solverCalibration.clp_inference_method} />
           </div>
           <div className="mt-2 space-y-2">
             <div>
-              <p className="mb-1 text-[11px] font-medium text-zinc-500">Observed sector energy (GWh)</p>
+              <p className="mb-1 text-[11px] font-medium text-zinc-500">Observed HK Electric sector energy (GWh)</p>
               <CountBadges counts={sectorGwh} />
+            </div>
+            <div>
+              <p className="mb-1 text-[11px] font-medium text-zinc-500">Inferred CLP sector energy (GWh)</p>
+              <CountBadges counts={inferredClpSectorGwh} />
             </div>
             <div>
               <p className="mb-1 text-[11px] font-medium text-zinc-500">Load provenance share</p>
@@ -518,7 +534,7 @@ function DiagnosticsPanel({
               </div>
             </div>
             {calibrationWarnings.length > 0 && (
-              <div className="rounded-[4px] border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs leading-5 text-amber-900">
+              <div className="rounded-[4px] border border-blue-300 bg-blue-50 px-2 py-1.5 text-xs leading-5 text-blue-900">
                 {calibrationWarnings[0]}
               </div>
             )}
