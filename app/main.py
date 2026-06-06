@@ -175,6 +175,7 @@ def grid_summary() -> list[dict[str, Any]]:
 def topology_preview(
     region_key: str = "hong-kong",
     snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
+    demand_snapshot: str = Query(default="peak_16h", pattern="^(peak_16h|overnight_04h)$"),
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -187,13 +188,18 @@ def topology_preview(
             region_key=region_key,
             limit=100000,
         )
-    return build_topology_preview(rows, snap_tolerance_km=snap_tolerance_km)
+    return build_topology_preview(
+        rows,
+        snap_tolerance_km=snap_tolerance_km,
+        demand_snapshot=demand_snapshot,
+    )
 
 
 @app.get("/grid/topology/powermodels-preview")
 def powermodels_preview(
     region_key: str = "hong-kong",
     snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
+    demand_snapshot: str = Query(default="peak_16h", pattern="^(peak_16h|overnight_04h)$"),
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -206,13 +212,18 @@ def powermodels_preview(
             region_key=region_key,
             limit=100000,
         )
-    return build_powermodels_preview(rows, snap_tolerance_km=snap_tolerance_km)
+    return build_powermodels_preview(
+        rows,
+        snap_tolerance_km=snap_tolerance_km,
+        demand_snapshot=demand_snapshot,
+    )
 
 
 @app.get("/grid/topology/validation")
 def topology_validation(
     region_key: str = "hong-kong",
     snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
+    demand_snapshot: str = Query(default="peak_16h", pattern="^(peak_16h|overnight_04h)$"),
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -225,4 +236,8 @@ def topology_validation(
             region_key=region_key,
             limit=100000,
         )
-    return build_powermodels_validation(rows, snap_tolerance_km=snap_tolerance_km)
+    return build_powermodels_validation(
+        rows,
+        snap_tolerance_km=snap_tolerance_km,
+        demand_snapshot=demand_snapshot,
+    )

@@ -56,6 +56,32 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert sum(gen["pmax"] for gen in case["gen"].values()) > 95.91
 
 
+def test_powermodels_preview_exports_overnight_snapshot() -> None:
+    peak_case = build_powermodels_preview(_sample_rows(), snap_tolerance_km=0.2)
+    overnight_case = build_powermodels_preview(
+        _sample_rows(),
+        snap_tolerance_km=0.2,
+        demand_snapshot="overnight_04h",
+    )
+
+    assert overnight_case["demand_snapshot"] == "overnight_04h"
+    assert overnight_case["_metadata"]["load_factor"] == 0.55
+    assert overnight_case["_metadata"]["total_pd_mw"] == 5275.05
+    assert sum(load["pd"] for load in overnight_case["load"].values()) == 52.7505
+    assert sum(gen["pmax"] for gen in overnight_case["gen"].values()) == sum(
+        gen["pmax"] for gen in peak_case["gen"].values()
+    )
+
+
+def test_topology_preview_rejects_unknown_demand_snapshot() -> None:
+    try:
+        build_topology_preview(_sample_rows(), demand_snapshot="lunch")
+    except ValueError as exc:
+        assert "Unknown demand snapshot 'lunch'" in str(exc)
+    else:
+        raise AssertionError("Expected unknown demand snapshot to raise ValueError")
+
+
 def test_powermodels_validation_reports_islands_and_capacity() -> None:
     case = build_powermodels_preview(_sample_rows(), snap_tolerance_km=0.2)
 

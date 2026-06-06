@@ -26,6 +26,16 @@ HK_PEAK_DEMAND_MW = {
     "clp": 7336.0,
     "hk-electric": 2255.0,
 }
+DEMAND_SNAPSHOTS = {
+    "peak_16h": {
+        "label": "Hong Kong 2024 peak demand, 16h representative snapshot",
+        "load_factor": 1.0,
+    },
+    "overnight_04h": {
+        "label": "Hong Kong 2024 overnight low-load, 04h representative snapshot",
+        "load_factor": 0.55,
+    },
+}
 BASE_MVA = 100.0
 
 VOLTAGE_DEFAULTS = {
@@ -189,7 +199,9 @@ def build_topology_preview(
     rows: Iterable[Any],
     *,
     snap_tolerance_km: float = 0.75,
+    demand_snapshot: str = "peak_16h",
 ) -> dict[str, Any]:
+    snapshot = _demand_snapshot(demand_snapshot)
     records = [_row_to_record(row) for row in rows]
     buses: list[dict[str, Any]] = []
     branches: list[dict[str, Any]] = []
@@ -298,11 +310,14 @@ def build_topology_preview(
         )
 
     buses.extend(synthetic_buses.values())
-    load_allocations = _allocate_peak_loads(buses)
+    load_allocations = _allocate_loads(buses, demand_snapshot=demand_snapshot)
     return {
         "metadata": {
             "schema": "tiangou.topology_preview.v1",
             "snap_tolerance_km": snap_tolerance_km,
+            "demand_snapshot": demand_snapshot,
+            "demand_snapshot_label": snapshot["label"],
+            "load_factor": snapshot["load_factor"],
             "bus_count": len(buses),
             "branch_count": len(branches),
             "generator_count": len(generators),
@@ -320,8 +335,13 @@ def build_powermodels_preview(
     rows: Iterable[Any],
     *,
     snap_tolerance_km: float = 0.75,
+    demand_snapshot: str = "peak_16h",
 ) -> dict[str, Any]:
-    topology = build_topology_preview(rows, snap_tolerance_km=snap_tolerance_km)
+    topology = build_topology_preview(
+        rows,
+        snap_tolerance_km=snap_tolerance_km,
+        demand_snapshot=demand_snapshot,
+    )
     return topology_preview_to_powermodels(topology)
 
 
@@ -329,8 +349,13 @@ def build_powermodels_validation(
     rows: Iterable[Any],
     *,
     snap_tolerance_km: float = 0.75,
+    demand_snapshot: str = "peak_16h",
 ) -> dict[str, Any]:
-    case = build_powermodels_preview(rows, snap_tolerance_km=snap_tolerance_km)
+    case = build_powermodels_preview(
+        rows,
+        snap_tolerance_km=snap_tolerance_km,
+        demand_snapshot=demand_snapshot,
+    )
     return validate_powermodels_case(case)
 
 
@@ -404,6 +429,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
     return {
         "name": "hong_kong_osm_preview",
         "source_version": "tiangou.powermodels_preview.v1",
+        "demand_snapshot": topology["metadata"]["demand_snapshot"],
         "baseMVA": BASE_MVA,
         "per_unit": True,
         "bus": bus_dict,
@@ -416,6 +442,9 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
         "dcline": {},
         "_metadata": {
             "topology_schema": topology["metadata"]["schema"],
+            "demand_snapshot": topology["metadata"]["demand_snapshot"],
+            "demand_snapshot_label": topology["metadata"]["demand_snapshot_label"],
+            "load_factor": topology["metadata"]["load_factor"],
             "bus_count": len(bus_dict),
             "branch_count": len(branch_dict),
             "load_count": len(load_dict),
@@ -676,7 +705,8 @@ def _equivalent_generators(
         bus = _best_generator_bus(buses, territory)
         if bus is None:
             continue
-        pmax_mw = max(pd_mw * 1.25, 100.0)
+        capacity_anchor_mw = HK_PEAK_DEMAND_MW.get(territory, pd_mw)
+        pmax_mw = max(capacity_anchor_mw * 1.25, 100.0)
         generators.append(
             {
                 "id": f"equivalent_gen:{territory}",
@@ -724,7 +754,21 @@ def _best_generator_bus(
     return max(candidates, key=lambda bus: bus.get("base_kv") or 0.0)
 
 
-def _allocate_peak_loads(buses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _demand_snapshot(demand_snapshot: str) -> dict[str, Any]:
+    try:
+        return DEMAND_SNAPSHOTS[demand_snapshot]
+    except KeyError as exc:
+        known = ", ".join(sorted(DEMAND_SNAPSHOTS))
+        raise ValueError(f"Unknown demand snapshot '{demand_snapshot}'. Known snapshots: {known}") from exc
+
+
+def _allocate_loads(
+    buses: list[dict[str, Any]],
+    *,
+    demand_snapshot: str,
+) -> list[dict[str, Any]]:
+    snapshot = _demand_snapshot(demand_snapshot)
+    load_factor = snapshot["load_factor"]
     loads = []
     for territory, peak_mw in HK_PEAK_DEMAND_MW.items():
         eligible = [
@@ -736,7 +780,7 @@ def _allocate_peak_loads(buses: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ]
         if not eligible:
             continue
-        pd_mw = peak_mw / len(eligible)
+        pd_mw = peak_mw * load_factor / len(eligible)
         for bus in eligible:
             loads.append(
                 {
@@ -745,8 +789,9 @@ def _allocate_peak_loads(buses: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "service_territory": territory,
                     "pd_mw": round(pd_mw, 3),
                     "qd_mvar": round(pd_mw * 0.329, 3),
-                    "snapshot": "peak_2024",
-                    "provenance": "public_peak_demand_equal_substation_split",
+                    "snapshot": demand_snapshot,
+                    "provenance": "public_peak_demand_scaled_equal_substation_split",
+                    "load_factor": load_factor,
                     "confidence": 0.35,
                 }
             )

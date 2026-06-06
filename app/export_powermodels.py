@@ -5,7 +5,7 @@ from typing import Any
 
 from app.database import connect
 from app.repository import list_elements
-from app.topology import build_powermodels_preview, validate_powermodels_case
+from app.topology import DEMAND_SNAPSHOTS, build_powermodels_preview, validate_powermodels_case
 
 
 def export_powermodels_case(
@@ -14,12 +14,17 @@ def export_powermodels_case(
     output_path: Path,
     region_key: str = "hong-kong",
     snap_tolerance_km: float = 0.75,
+    demand_snapshot: str = "peak_16h",
     allow_validation_errors: bool = False,
 ) -> dict[str, Any]:
     with connect(database_path) as conn:
         rows = list_elements(conn, region_key=region_key, limit=100000)
 
-    case = build_powermodels_preview(rows, snap_tolerance_km=snap_tolerance_km)
+    case = build_powermodels_preview(
+        rows,
+        snap_tolerance_km=snap_tolerance_km,
+        demand_snapshot=demand_snapshot,
+    )
     validation = validate_powermodels_case(case)
     if validation["status"] == "error" and not allow_validation_errors:
         codes = ", ".join(error["code"] for error in validation["errors"])
@@ -30,6 +35,7 @@ def export_powermodels_case(
     return {
         "output_path": str(output_path),
         "region_key": region_key,
+        "demand_snapshot": demand_snapshot,
         "validation": validation,
         "metadata": case["_metadata"],
     }
@@ -41,6 +47,7 @@ def main() -> None:
     parser.add_argument("--database-path", type=Path, default=Path("data/tiangou.sqlite3"))
     parser.add_argument("--region-key", default="hong-kong")
     parser.add_argument("--snap-tolerance-km", type=float, default=0.75)
+    parser.add_argument("--demand-snapshot", choices=sorted(DEMAND_SNAPSHOTS), default="peak_16h")
     parser.add_argument(
         "--allow-validation-errors",
         action="store_true",
@@ -53,6 +60,7 @@ def main() -> None:
         output_path=args.output_path,
         region_key=args.region_key,
         snap_tolerance_km=args.snap_tolerance_km,
+        demand_snapshot=args.demand_snapshot,
         allow_validation_errors=args.allow_validation_errors,
     )
     print(json.dumps(result, indent=2, sort_keys=True))

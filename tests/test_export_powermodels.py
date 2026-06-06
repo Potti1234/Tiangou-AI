@@ -25,6 +25,25 @@ def test_export_powermodels_case_writes_json(tmp_path) -> None:
     assert payload["_metadata"]["total_pd_mw"] == 7336.0
 
 
+def test_export_powermodels_case_writes_overnight_snapshot(tmp_path) -> None:
+    db_path = tmp_path / "grid.sqlite3"
+    output_path = tmp_path / "hong_kong_04h_model.json"
+    _seed_grid(db_path)
+
+    result = export_powermodels_case(
+        database_path=db_path,
+        output_path=output_path,
+        snap_tolerance_km=0.2,
+        demand_snapshot="overnight_04h",
+    )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result["demand_snapshot"] == "overnight_04h"
+    assert payload["demand_snapshot"] == "overnight_04h"
+    assert payload["_metadata"]["total_pd_mw"] == 4034.8
+    assert payload["_metadata"]["total_equivalent_pmax_mw"] == 9170.0
+
+
 def test_export_powermodels_case_blocks_validation_errors(tmp_path) -> None:
     db_path = tmp_path / "empty.sqlite3"
     output_path = tmp_path / "empty.json"
