@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from "react"
 import {
+  AlertTriangle,
   Cable,
   CircleDot,
+  Database,
   Factory,
   GitBranch,
+  Layers3,
   Loader2,
+  MapPinned,
   RadioTower,
   RotateCcw,
   ServerCog,
@@ -47,6 +51,101 @@ type GridAsset = {
   updated_at: string
 }
 
+type TopologyBus = {
+  id: string
+  name: string | null
+  power: string
+  lat: number | null
+  lon: number | null
+  base_kv: number | null
+  service_territory: string | null
+  provenance: string | null
+  confidence: number | null
+}
+
+type TopologyBranch = {
+  id: string
+  name: string | null
+  power: string
+  from_bus_id: string | null
+  to_bus_id: string | null
+  voltage_kv: number | null
+  length_km: number | null
+  provenance: string | null
+  confidence: number | null
+  parameter_defaults?: { matched_voltage_kv?: number; rate_mva?: number }
+}
+
+type TopologyPreview = {
+  metadata: Record<string, number | string | boolean | null>
+  quality: Record<string, unknown>
+  buses: TopologyBus[]
+  branches: TopologyBranch[]
+}
+
+type PowerModelsBus = {
+  bus_i: number
+  bus_type: number
+  base_kv: number
+  source_id: string
+  service_territory: string | null
+  provenance: string | null
+}
+
+type PowerModelsBranch = {
+  f_bus: number
+  t_bus: number
+  source_id: string
+  transformer: boolean
+  rate_a: number
+  matched_voltage_kv?: number
+  provenance: string | null
+  confidence: number | null
+}
+
+type PowerModelsLoad = {
+  load_bus: number
+  pd: number
+  qd: number
+  service_territory: string | null
+}
+
+type PowerModelsGen = {
+  gen_bus: number
+  pmax: number
+  resource_type: string
+  provenance: string | null
+  service_territory: string | null
+}
+
+type PowerModelsCase = {
+  bus: Record<string, PowerModelsBus>
+  branch: Record<string, PowerModelsBranch>
+  load: Record<string, PowerModelsLoad>
+  gen: Record<string, PowerModelsGen>
+  _metadata: Record<string, unknown>
+}
+
+type ValidationPayload = {
+  status: StageStatus
+  errors: Array<Record<string, unknown>>
+  warnings: Array<Record<string, unknown>>
+  metrics: Record<string, number | Record<string, number>>
+}
+
+type PipelineSummary = {
+  stage_status: Record<string, StageStatus>
+  raw_osm_counts_by_power: Record<string, number>
+  topology_metadata: Record<string, number | string | boolean | null>
+  quality: Record<string, unknown>
+  solver_metadata: Record<string, unknown>
+  validation: ValidationPayload
+  handoff_artifacts: Record<string, string>
+}
+
+type StageStatus = "not_run" | "running" | "warning" | "error" | "complete" | "ok"
+type Mode = "raw" | "reconstructed" | "solver" | "validation" | "handoff"
+
 type PowerStyle = {
   label: string
   color: string
@@ -54,11 +153,41 @@ type PowerStyle = {
   icon: typeof Zap
 }
 
+type RouteLayer = {
+  id: string
+  label: string
+  coordinates: [number, number][]
+  color: string
+  width: number
+  opacity: number
+  dashArray?: [number, number]
+}
+
+type PointLayer = {
+  id: string
+  label: string
+  longitude: number
+  latitude: number
+  color: string
+  size: number
+  icon: typeof CircleDot
+  meta: Array<[string, string]>
+}
+
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ??
   "http://127.0.0.1:8000"
 
 const HONG_KONG_CENTER: [number, number] = [114.1694, 22.3193]
+const POLL_MS = 5000
+
+const MODES: Array<{ id: Mode; label: string; stage: string; icon: typeof Layers3 }> = [
+  { id: "raw", label: "Raw OSM", stage: "raw_osm", icon: Database },
+  { id: "reconstructed", label: "Reconstructed circuits", stage: "reconstructed_circuits", icon: Cable },
+  { id: "solver", label: "Solver topology", stage: "solver_topology", icon: GitBranch },
+  { id: "validation", label: "Validation", stage: "validation", icon: AlertTriangle },
+  { id: "handoff", label: "Handoff artifacts", stage: "handoff_artifacts", icon: MapPinned },
+]
 
 const POWER_STYLES: Record<string, PowerStyle> = {
   plant: { label: "Plant", color: "#a16207", marker: "bg-amber-700", icon: Factory },
@@ -66,9 +195,9 @@ const POWER_STYLES: Record<string, PowerStyle> = {
   substation: { label: "Substation", color: "#b84336", marker: "bg-red-600", icon: ServerCog },
   sub_station: { label: "Substation", color: "#b84336", marker: "bg-red-600", icon: ServerCog },
   transformer: { label: "Transformer", color: "#2563eb", marker: "bg-blue-600", icon: GitBranch },
-  line: { label: "Line", color: "#a8661f", marker: "bg-stone-700", icon: Cable },
-  minor_line: { label: "Minor line", color: "#a8661f", marker: "bg-stone-600", icon: Cable },
-  cable: { label: "Cable", color: "#7f6a62", marker: "bg-stone-500", icon: Cable },
+  line: { label: "Line", color: "#7a5a28", marker: "bg-stone-700", icon: Cable },
+  minor_line: { label: "Minor line", color: "#7a5a28", marker: "bg-stone-600", icon: Cable },
+  cable: { label: "Cable", color: "#6d6875", marker: "bg-stone-500", icon: Cable },
   tower: { label: "Tower", color: "#30343b", marker: "bg-zinc-800", icon: RadioTower },
   pole: { label: "Pole", color: "#3f3f46", marker: "bg-zinc-700", icon: CircleDot },
 }
@@ -80,31 +209,6 @@ const FALLBACK_STYLE: PowerStyle = {
   icon: CircleDot,
 }
 
-const TOOLTIP_KEYS: Array<[keyof GridAsset, string]> = [
-  ["voltage", "Voltage"],
-  ["operator", "Operator"],
-  ["frequency", "Frequency"],
-  ["cables", "Cables"],
-  ["circuits", "Circuits"],
-  ["location", "Location"],
-]
-
-const IMPORTANT_TAGS = [
-  "name",
-  "name:en",
-  "power",
-  "substation",
-  "generator:source",
-  "generator:method",
-  "voltage",
-  "operator",
-  "frequency",
-  "cables",
-  "circuits",
-  "location",
-  "ref",
-]
-
 function styleFor(power: string) {
   return POWER_STYLES[power] ?? FALLBACK_STYLE
 }
@@ -113,23 +217,25 @@ function assetKey(asset: GridAsset) {
   return `${asset.osm_type}-${asset.osm_id}`
 }
 
+function assetSourceId(asset: GridAsset) {
+  return `osm:${asset.osm_type}:${asset.osm_id}`
+}
+
 function assetTitle(asset: GridAsset) {
   return asset.name || asset.tags["name:en"] || `${styleFor(asset.power).label} ${asset.osm_id}`
 }
 
-function populatedFields(asset: GridAsset) {
-  const baseFields = TOOLTIP_KEYS.flatMap(([key, label]) => {
-    const value = asset[key]
-    return value ? [{ label, value: String(value) }] : []
-  })
+function statusLabel(status: StageStatus | undefined) {
+  if (!status) return "not run"
+  return status === "ok" ? "complete" : status.replaceAll("_", " ")
+}
 
-  const tagFields = IMPORTANT_TAGS.flatMap((key) => {
-    if (TOOLTIP_KEYS.some(([field]) => field === key)) return []
-    const value = asset.tags[key]
-    return value ? [{ label: key, value }] : []
-  })
-
-  return [...baseFields, ...tagFields]
+function statusClass(status: StageStatus | undefined) {
+  if (status === "complete" || status === "ok") return "border-emerald-700/30 bg-emerald-50 text-emerald-800"
+  if (status === "running") return "border-blue-700/30 bg-blue-50 text-blue-800"
+  if (status === "warning") return "border-amber-700/30 bg-amber-50 text-amber-800"
+  if (status === "error") return "border-red-700/30 bg-red-50 text-red-800"
+  return "border-zinc-300 bg-zinc-100 text-zinc-600"
 }
 
 function isLinearAsset(asset: GridAsset) {
@@ -146,62 +252,162 @@ function routeCoordinates(asset: GridAsset): [number, number][] {
   return (asset.geometry ?? []).map((point) => [point.lon, point.lat])
 }
 
-function MarkerDot({ asset, selected }: { asset: GridAsset; selected: boolean }) {
+function formatNumber(value: unknown, digits = 0) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "0"
+  return value.toLocaleString(undefined, { maximumFractionDigits: digits })
+}
+
+function metric(summary: PipelineSummary | null, key: string) {
+  const value = summary?.validation.metrics[key]
+  return typeof value === "number" ? value : undefined
+}
+
+function MetadataRow({ label, value }: { label: string; value: unknown }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 border-b border-zinc-200/70 py-1.5 text-xs">
+      <span className="text-zinc-500">{label}</span>
+      <span className="max-w-[190px] truncate font-medium tabular-nums text-zinc-900">
+        {typeof value === "number" ? formatNumber(value, 3) : String(value ?? "n/a")}
+      </span>
+    </div>
+  )
+}
+
+function RawMarker({ asset, selected }: { asset: GridAsset; selected: boolean }) {
   const style = styleFor(asset.power)
   const Icon = style.icon
   const compact = asset.power === "tower" || asset.power === "pole"
 
   return (
-    <div className="relative">
-      <div
-        className={cn(
-          "grid place-items-center rounded-full border border-zinc-950/70 shadow-sm transition active:scale-95",
-          compact ? "size-2.5 bg-zinc-800" : "size-5 border-white",
-          !compact && style.marker,
-          selected && "scale-125 ring-4 ring-zinc-950/20",
-        )}
-      >
-        {!compact && <Icon className="size-3 text-white" strokeWidth={2} />}
-      </div>
+    <div
+      className={cn(
+        "grid place-items-center rounded-full border border-zinc-950/70 shadow-sm transition active:scale-95",
+        compact ? "size-2.5 bg-zinc-800" : "size-5 border-white",
+        !compact && style.marker,
+        selected && "scale-125 ring-4 ring-zinc-950/20",
+      )}
+    >
+      {!compact && <Icon className="size-3 text-white" strokeWidth={2} />}
     </div>
   )
 }
 
-function AssetTooltip({ asset }: { asset: GridAsset }) {
-  const fields = populatedFields(asset)
-  const style = styleFor(asset.power)
+function PointMarker({ point }: { point: PointLayer }) {
+  const Icon = point.icon
+  return (
+    <div
+      className="grid place-items-center rounded-full border border-white shadow-[0_8px_28px_-12px_rgba(24,24,27,0.8)]"
+      style={{ width: point.size, height: point.size, backgroundColor: point.color }}
+    >
+      <Icon className="size-3.5 text-white" strokeWidth={2.2} />
+    </div>
+  )
+}
+
+function MarkerTip({ title, rows }: { title: string; rows: Array<[string, string]> }) {
+  return (
+    <div className="w-72 rounded-[4px] border border-zinc-300 bg-white/96 p-2.5 text-left shadow-lg">
+      <p className="text-sm font-semibold leading-snug text-zinc-950">{title}</p>
+      <dl className="mt-2 grid grid-cols-[88px_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
+        {rows.map(([label, value]) => (
+          <div key={label} className="contents">
+            <dt className="text-zinc-500">{label}</dt>
+            <dd className="truncate font-medium text-zinc-900">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  )
+}
+
+function DiagnosticsPanel({
+  summary,
+  mode,
+}: {
+  summary: PipelineSummary | null
+  mode: Mode
+}) {
+  const counts = summary?.raw_osm_counts_by_power ?? {}
+  const artifacts = summary?.handoff_artifacts ?? {}
 
   return (
-    <div className="w-80 rounded-[3px] border border-zinc-300 bg-white/95 p-2.5 text-left shadow-lg">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold leading-snug text-zinc-950">
-            {assetTitle(asset)}
-          </p>
-          <p className="mt-0.5 font-mono text-[11px] text-zinc-500">
-            {asset.osm_type}/{asset.osm_id}
-          </p>
+    <aside className="absolute bottom-3 right-3 top-3 z-[2] flex w-[390px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-[6px] border border-zinc-300 bg-[#fbfbfa]/95 shadow-[0_22px_70px_-42px_rgba(24,24,27,0.75)]">
+      <div className="border-b border-zinc-200 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-zinc-950">Pipeline diagnostics</p>
+            <p className="mt-0.5 text-xs text-zinc-500">Mode: {MODES.find((item) => item.id === mode)?.label}</p>
+          </div>
+          <Badge className={cn("rounded-[3px] border px-2 py-1", statusClass(summary?.validation.status))}>
+            {statusLabel(summary?.validation.status)}
+          </Badge>
         </div>
-        <span
-          className="rounded-[2px] px-1.5 py-0.5 text-[11px] font-medium text-white"
-          style={{ backgroundColor: style.color }}
-        >
-          {style.label}
-        </span>
       </div>
-      {fields.length > 0 ? (
-        <dl className="mt-2 grid grid-cols-[88px_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
-          {fields.slice(0, 8).map((field) => (
-            <div key={field.label} className="contents">
-              <dt className="text-zinc-500">{field.label}</dt>
-              <dd className="truncate font-medium text-zinc-900">{field.value}</dd>
-            </div>
-          ))}
-        </dl>
-      ) : (
-        <p className="mt-2 text-xs text-zinc-500">No descriptive tags in this API item.</p>
-      )}
-    </div>
+
+      <div className="min-h-0 flex-1 overflow-auto p-3">
+        <section>
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Stage status</h2>
+          <div className="mt-2 grid grid-cols-2 gap-1.5">
+            {MODES.map((item) => {
+              const Icon = item.icon
+              const status = summary?.stage_status[item.stage]
+              return (
+                <div key={item.id} className={cn("rounded-[4px] border px-2 py-1.5", statusClass(status))}>
+                  <div className="flex items-center gap-1.5">
+                    <Icon className="size-3.5" />
+                    <span className="truncate text-[11px] font-semibold">{item.label}</span>
+                  </div>
+                  <p className="mt-0.5 text-[11px]">{statusLabel(status)}</p>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+
+        <section className="mt-4">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Core metrics</h2>
+          <div className="mt-2 rounded-[4px] border border-zinc-200 bg-white/70 px-2">
+            <MetadataRow label="Raw assets" value={Object.values(counts).reduce((sum, count) => sum + count, 0)} />
+            <MetadataRow label="Preview buses" value={summary?.topology_metadata.bus_count} />
+            <MetadataRow label="Preview branches" value={summary?.topology_metadata.branch_count} />
+            <MetadataRow label="Solver buses" value={summary?.solver_metadata.bus_count} />
+            <MetadataRow label="Solver branches" value={summary?.solver_metadata.branch_count} />
+            <MetadataRow label="Loads" value={summary?.solver_metadata.load_count} />
+            <MetadataRow label="Generators/imports" value={summary?.solver_metadata.gen_count} />
+            <MetadataRow label="Total demand MW" value={metric(summary, "total_pd_mw")} />
+            <MetadataRow label="Total Pmax MW" value={metric(summary, "total_pmax_mw")} />
+            <MetadataRow label="Island count" value={metric(summary, "island_count")} />
+            <MetadataRow label="Severe mismatches" value={metric(summary, "severe_branch_voltage_mismatch_count")} />
+          </div>
+        </section>
+
+        <section className="mt-4">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Raw OSM counts</h2>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {Object.entries(counts).length ? (
+              Object.entries(counts).map(([power, count]) => (
+                <Badge key={power} variant="outline" className="rounded-[3px] border-zinc-300 bg-white/75">
+                  {styleFor(power).label} {count}
+                </Badge>
+              ))
+            ) : (
+              <p className="text-xs text-zinc-500">No ingested assets for this region.</p>
+            )}
+          </div>
+        </section>
+
+        <section className="mt-4">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Handoff artifacts</h2>
+          <div className="mt-2 rounded-[4px] border border-zinc-200 bg-zinc-950 p-2 font-mono text-[11px] leading-5 text-zinc-100">
+            {Object.entries(artifacts).map(([key, value]) => (
+              <div key={key} className="truncate">
+                <span className="text-zinc-400">{key}</span> {value}
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </aside>
   )
 }
 
@@ -213,10 +419,16 @@ function RawPanel({
   onClose: () => void
 }) {
   if (!asset) return null
-  const fields = populatedFields(asset)
+  const fields: Array<[string, string]> = [
+    ["Voltage", asset.voltage ?? ""],
+    ["Operator", asset.operator ?? ""],
+    ["Frequency", asset.frequency ?? ""],
+    ["Cables", asset.cables ?? ""],
+    ["Circuits", asset.circuits ?? ""],
+  ].filter((field): field is [string, string] => Boolean(field[1]))
 
   return (
-    <aside className="absolute bottom-4 right-4 top-4 z-[2] flex w-[420px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[4px] border border-zinc-300 bg-white/96 shadow-[0_20px_80px_-40px_rgba(24,24,27,0.65)]">
+    <aside className="absolute bottom-3 left-3 z-[3] max-h-[48dvh] w-[420px] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-[6px] border border-zinc-300 bg-white/96 shadow-[0_20px_80px_-40px_rgba(24,24,27,0.65)]">
       <div className="flex items-start justify-between gap-3 border-b border-zinc-200 p-3">
         <div>
           <p className="text-sm font-semibold text-zinc-950">{assetTitle(asset)}</p>
@@ -228,32 +440,11 @@ function RawPanel({
           <X className="size-4" />
         </Button>
       </div>
-      <div className="space-y-4 overflow-auto p-3">
-        <section>
-          <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-            Populated fields
-          </h2>
-          <dl className="mt-2 divide-y divide-zinc-100 rounded-[3px] border border-zinc-200">
-            {fields.length > 0 ? (
-              fields.map((field) => (
-                <div key={field.label} className="grid grid-cols-[120px_minmax(0,1fr)] gap-2 px-2 py-1.5 text-xs">
-                  <dt className="text-zinc-500">{field.label}</dt>
-                  <dd className="break-words font-medium text-zinc-900">{field.value}</dd>
-                </div>
-              ))
-            ) : (
-              <div className="px-2 py-2 text-xs text-zinc-500">No populated fields beyond ids and type.</div>
-            )}
-          </dl>
-        </section>
-        <section>
-          <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-            Raw API JSON
-          </h2>
-          <pre className="mt-2 max-h-[48dvh] overflow-auto rounded-[3px] bg-zinc-950 p-3 font-mono text-[11px] leading-5 text-zinc-100">
-            {JSON.stringify(asset, null, 2)}
-          </pre>
-        </section>
+      <div className="overflow-auto p-3">
+        <MarkerTip title="Selected raw OSM asset" rows={fields.length ? fields : [["Tags", "No descriptive tags"]]} />
+        <pre className="mt-3 max-h-[26dvh] overflow-auto rounded-[4px] bg-zinc-950 p-3 font-mono text-[11px] leading-5 text-zinc-100">
+          {JSON.stringify(asset, null, 2)}
+        </pre>
       </div>
     </aside>
   )
@@ -261,25 +452,38 @@ function RawPanel({
 
 function App() {
   const [assets, setAssets] = useState<GridAsset[]>([])
-  const [selectedPower, setSelectedPower] = useState("all")
+  const [topology, setTopology] = useState<TopologyPreview | null>(null)
+  const [caseData, setCaseData] = useState<PowerModelsCase | null>(null)
+  const [summary, setSummary] = useState<PipelineSummary | null>(null)
+  const [mode, setMode] = useState<Mode>("raw")
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [ingesting, setIngesting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const loadAssets = async () => {
-    setLoading(true)
+  const query = "region_key=hong-kong&include_hk_interties=true&min_voltage_kv=100"
+
+  const loadDashboard = async (showLoading = true) => {
+    if (showLoading) setLoading(true)
     setError(null)
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/grid/assets?region_key=hong-kong&limit=1000`,
-      )
-      if (!response.ok) throw new Error(`API returned ${response.status}`)
-      setAssets(await response.json())
+      const [assetsResponse, topologyResponse, caseResponse, summaryResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}/grid/assets?region_key=hong-kong&limit=1000`),
+        fetch(`${API_BASE_URL}/grid/topology/preview?${query}`),
+        fetch(`${API_BASE_URL}/grid/topology/powermodels-preview?${query}`),
+        fetch(`${API_BASE_URL}/grid/topology/pipeline-summary?${query}`),
+      ])
+      for (const response of [assetsResponse, topologyResponse, caseResponse, summaryResponse]) {
+        if (!response.ok) throw new Error(`API returned ${response.status}`)
+      }
+      setAssets(await assetsResponse.json())
+      setTopology(await topologyResponse.json())
+      setCaseData(await caseResponse.json())
+      setSummary(await summaryResponse.json())
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load assets")
+      setError(err instanceof Error ? err.message : "Could not load dashboard data")
     } finally {
-      setLoading(false)
+      if (showLoading) setLoading(false)
     }
   }
 
@@ -287,14 +491,12 @@ function App() {
     setIngesting(true)
     setError(null)
     try {
-      const response = await fetch(`${API_BASE_URL}/ingest/hong-kong`, {
-        method: "POST",
-      })
+      const response = await fetch(`${API_BASE_URL}/ingest/hong-kong`, { method: "POST" })
       if (!response.ok) {
         const body = await response.json().catch(() => null)
         throw new Error(body?.detail ?? `Ingest returned ${response.status}`)
       }
-      await loadAssets()
+      await loadDashboard()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not ingest data")
     } finally {
@@ -303,7 +505,14 @@ function App() {
   }
 
   useEffect(() => {
-    void loadAssets()
+    void loadDashboard()
+  }, [])
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void loadDashboard(false)
+    }, POLL_MS)
+    return () => window.clearInterval(id)
   }, [])
 
   const assetsWithLocation = useMemo(
@@ -311,30 +520,165 @@ function App() {
     [assets],
   )
 
-  const powerCounts = useMemo(() => {
-    const counts = new globalThis.Map<string, number>()
-    for (const asset of assetsWithLocation) {
-      counts.set(asset.power, (counts.get(asset.power) ?? 0) + 1)
+  const busBySourceId = useMemo(() => {
+    const map = new globalThis.Map<string, TopologyBus>()
+    for (const bus of topology?.buses ?? []) map.set(bus.id, bus)
+    return map
+  }, [topology])
+
+  const previewBranchById = useMemo(() => {
+    const map = new globalThis.Map<string, TopologyBranch>()
+    for (const branch of topology?.branches ?? []) map.set(branch.id, branch)
+    return map
+  }, [topology])
+
+  const rawRouteBySourceId = useMemo(() => {
+    const map = new globalThis.Map<string, [number, number][]>()
+    for (const asset of assets) {
+      if (isLinearAsset(asset)) map.set(assetSourceId(asset), routeCoordinates(asset))
     }
-    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
-  }, [assetsWithLocation])
+    return map
+  }, [assets])
 
-  const filteredAssets = useMemo(
-    () =>
-      selectedPower === "all"
-        ? assetsWithLocation
-        : assetsWithLocation.filter((asset) => asset.power === selectedPower),
-    [assetsWithLocation, selectedPower],
-  )
+  const caseBusByNumber = useMemo(() => {
+    const map = new globalThis.Map<number, PowerModelsBus>()
+    for (const bus of Object.values(caseData?.bus ?? {})) map.set(bus.bus_i, bus)
+    return map
+  }, [caseData])
 
-  const linearAssets = useMemo(
-    () => filteredAssets.filter(isLinearAsset),
-    [filteredAssets],
-  )
+  const severeMismatchSourceIds = useMemo(() => {
+    const ids = new Set<string>()
+    const mismatches = summary?.validation.metrics.severe_branch_voltage_mismatch_count
+    if (typeof mismatches === "number" && mismatches > 0) {
+      for (const branch of Object.values(caseData?.branch ?? {})) {
+        const voltage = branch.matched_voltage_kv
+        const from = caseBusByNumber.get(branch.f_bus)
+        const to = caseBusByNumber.get(branch.t_bus)
+        if (!voltage || !from || !to) continue
+        if (
+          Math.abs(from.base_kv - voltage) / voltage >= 0.5 ||
+          Math.abs(to.base_kv - voltage) / voltage >= 0.5
+        ) {
+          ids.add(branch.source_id)
+        }
+      }
+    }
+    return ids
+  }, [caseData, caseBusByNumber, summary])
+
+  const coordinateForBus = (sourceId: string | undefined): [number, number] | null => {
+    if (!sourceId) return null
+    const bus = busBySourceId.get(sourceId)
+    if (!bus || bus.lat === null || bus.lon === null) return null
+    return [bus.lon, bus.lat]
+  }
+
+  const branchCoordinates = (branch: TopologyBranch): [number, number][] => {
+    const rawRoute = rawRouteBySourceId.get(branch.id)
+    if (rawRoute && rawRoute.length > 1) return rawRoute
+    const from = coordinateForBus(branch.from_bus_id ?? undefined)
+    const to = coordinateForBus(branch.to_bus_id ?? undefined)
+    return from && to ? [from, to] : []
+  }
+
+  const solverBranchCoordinates = (branch: PowerModelsBranch): [number, number][] => {
+    const preview = previewBranchById.get(branch.source_id)
+    if (preview) return branchCoordinates(preview)
+    const from = coordinateForBus(caseBusByNumber.get(branch.f_bus)?.source_id)
+    const to = coordinateForBus(caseBusByNumber.get(branch.t_bus)?.source_id)
+    return from && to ? [from, to] : []
+  }
+
+  const routeLayers = useMemo<RouteLayer[]>(() => {
+    if (mode === "raw") {
+      return assets.filter(isLinearAsset).map((asset) => ({
+        id: assetKey(asset),
+        label: assetTitle(asset),
+        coordinates: routeCoordinates(asset),
+        color: styleFor(asset.power).color,
+        width: asset.power === "cable" ? 3 : 4,
+        opacity: asset.power === "cable" ? 0.58 : 0.88,
+        dashArray: asset.power === "cable" ? [2, 2] : undefined,
+      }))
+    }
+
+    if (mode === "reconstructed") {
+      return (topology?.branches ?? []).flatMap((branch) => {
+        const coordinates = branchCoordinates(branch)
+        if (coordinates.length < 2) return []
+        const synthetic = branch.provenance?.includes("public") || branch.id.startsWith("synthetic:")
+        return [{
+          id: branch.id,
+          label: branch.name ?? branch.id,
+          coordinates,
+          color: synthetic ? "#2563eb" : branch.power === "cable" ? "#6d6875" : "#b45309",
+          width: synthetic ? 3 : 4,
+          opacity: synthetic ? 0.78 : 0.9,
+          dashArray: synthetic ? [3, 2] as [number, number] : undefined,
+        }]
+      })
+    }
+
+    return Object.entries(caseData?.branch ?? {}).flatMap(([id, branch]) => {
+      const coordinates = solverBranchCoordinates(branch)
+      if (coordinates.length < 2) return []
+      const mismatch = severeMismatchSourceIds.has(branch.source_id)
+      const synthetic = branch.provenance?.includes("public") || branch.source_id.startsWith("synthetic:")
+      return [{
+        id: `solver-${id}`,
+        label: branch.source_id,
+        coordinates,
+        color: mode === "validation" && mismatch ? "#dc2626" : synthetic ? "#2563eb" : "#15803d",
+        width: mode === "validation" && mismatch ? 6 : 4,
+        opacity: mode === "handoff" ? 0.45 : 0.9,
+        dashArray: branch.transformer || synthetic ? [3, 2] as [number, number] : undefined,
+      }]
+    })
+  }, [assets, caseData, mode, severeMismatchSourceIds, topology])
+
+  const pointLayers = useMemo<PointLayer[]>(() => {
+    if (mode === "raw") return []
+    const points: PointLayer[] = []
+
+    for (const [id, load] of Object.entries(caseData?.load ?? {})) {
+      const bus = caseBusByNumber.get(load.load_bus)
+      const coord = coordinateForBus(bus?.source_id)
+      if (!coord) continue
+      const pdMw = load.pd * 100
+      points.push({
+        id: `load-${id}`,
+        label: `${load.service_territory ?? "unknown"} load`,
+        longitude: coord[0],
+        latitude: coord[1],
+        color: "#7c3aed",
+        size: Math.max(12, Math.min(34, 10 + Math.sqrt(pdMw) / 2)),
+        icon: CircleDot,
+        meta: [["MW", formatNumber(pdMw, 1)], ["Bus", String(load.load_bus)]],
+      })
+    }
+
+    for (const [id, gen] of Object.entries(caseData?.gen ?? {})) {
+      const bus = caseBusByNumber.get(gen.gen_bus)
+      const coord = coordinateForBus(bus?.source_id)
+      if (!coord) continue
+      const pmaxMw = gen.pmax * 100
+      points.push({
+        id: `gen-${id}`,
+        label: gen.resource_type,
+        longitude: coord[0],
+        latitude: coord[1],
+        color: gen.resource_type.includes("equivalent") ? "#2563eb" : "#ca8a04",
+        size: Math.max(16, Math.min(40, 12 + Math.sqrt(pmaxMw) / 2)),
+        icon: gen.resource_type.includes("equivalent") ? Database : Factory,
+        meta: [["Pmax MW", formatNumber(pmaxMw, 1)], ["Bus", String(gen.gen_bus)]],
+      })
+    }
+    return points
+  }, [caseBusByNumber, caseData, mode])
 
   const pointAssets = useMemo(
-    () => filteredAssets.filter((asset) => !isLinearAsset(asset)),
-    [filteredAssets],
+    () => assetsWithLocation.filter((asset) => !isLinearAsset(asset)),
+    [assetsWithLocation],
   )
 
   const selectedAsset = useMemo(
@@ -343,101 +687,102 @@ function App() {
   )
 
   return (
-    <main className="h-[100dvh] overflow-hidden bg-[#d9dee1] text-zinc-950">
+    <main className="h-[100dvh] overflow-hidden bg-[#e5e7e3] text-zinc-950">
       <div className="relative h-full">
         <Map
-          center={
-            selectedAsset?.lon && selectedAsset?.lat
-              ? [selectedAsset.lon, selectedAsset.lat]
-              : HONG_KONG_CENTER
-          }
+          center={selectedAsset?.lon && selectedAsset?.lat ? [selectedAsset.lon, selectedAsset.lat] : HONG_KONG_CENTER}
           zoom={selectedAsset ? 13 : 10}
           theme="light"
           loading={loading}
           className="h-full w-full"
         >
           <MapControls position="top-right" />
-          {linearAssets.map((asset) => (
+          {routeLayers.map((route) => (
             <MapRoute
-              key={assetKey(asset)}
-              id={assetKey(asset)}
-              coordinates={routeCoordinates(asset)}
-              color={styleFor(asset.power).color}
-              width={asset.power === "cable" ? 3 : 4}
-              opacity={asset.power === "cable" ? 0.55 : 0.88}
-              dashArray={asset.power === "cable" ? [2, 2] : undefined}
-              onClick={() => setSelectedAssetId(assetKey(asset))}
+              key={route.id}
+              id={route.id}
+              coordinates={route.coordinates}
+              color={route.color}
+              width={route.width}
+              opacity={route.opacity}
+              dashArray={route.dashArray}
             />
           ))}
-          {pointAssets.map((asset) => {
-            if (asset.lat === null || asset.lon === null) return null
-            const key = assetKey(asset)
-            return (
-              <MapMarker
-                key={key}
-                longitude={asset.lon}
-                latitude={asset.lat}
-                onClick={() => setSelectedAssetId(key)}
-              >
+
+          {mode === "raw" &&
+            pointAssets.map((asset) => {
+              if (asset.lat === null || asset.lon === null) return null
+              const key = assetKey(asset)
+              return (
+                <MapMarker key={key} longitude={asset.lon} latitude={asset.lat} onClick={() => setSelectedAssetId(key)}>
+                  <MarkerContent>
+                    <RawMarker asset={asset} selected={selectedAssetId === key} />
+                  </MarkerContent>
+                  <MarkerTooltip>
+                    <MarkerTip
+                      title={assetTitle(asset)}
+                      rows={[
+                        ["Type", styleFor(asset.power).label],
+                        ["Voltage", asset.voltage ?? "n/a"],
+                        ["Operator", asset.operator ?? "n/a"],
+                      ]}
+                    />
+                  </MarkerTooltip>
+                </MapMarker>
+              )
+            })}
+
+          {mode !== "raw" &&
+            pointLayers.map((point) => (
+              <MapMarker key={point.id} longitude={point.longitude} latitude={point.latitude}>
                 <MarkerContent>
-                  <MarkerDot asset={asset} selected={selectedAssetId === key} />
+                  <PointMarker point={point} />
                 </MarkerContent>
                 <MarkerTooltip>
-                  <AssetTooltip asset={asset} />
+                  <MarkerTip title={point.label} rows={point.meta} />
                 </MarkerTooltip>
               </MapMarker>
-            )
-          })}
+            ))}
         </Map>
 
-        <header className="absolute left-3 top-3 z-[2] max-w-[calc(100vw-1.5rem)] rounded-[4px] border border-zinc-300 bg-white/92 p-3 shadow-sm">
+        <header className="absolute left-3 top-3 z-[2] max-w-[calc(100vw-420px-2rem)] rounded-[6px] border border-zinc-300 bg-[#fbfbfa]/95 p-3 shadow-sm">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge className="rounded-[3px] bg-zinc-950 px-2 py-1 text-white">
-              Tiangou OSM power layer
+            <Badge className="rounded-[3px] bg-zinc-950 px-2 py-1 text-white">Tiangou GridSFM dashboard</Badge>
+            <Badge variant="outline" className="rounded-[3px] border-zinc-300 bg-white/75 px-2 py-1">
+              {formatNumber(routeLayers.length)} map lines
             </Badge>
-            <Badge variant="outline" className="rounded-[3px] border-zinc-300 bg-white/80 px-2 py-1">
-              {filteredAssets.length} visible
-            </Badge>
-            <Badge variant="outline" className="rounded-[3px] border-zinc-300 bg-white/80 px-2 py-1">
-              {linearAssets.length} lines
+            <Badge variant="outline" className="rounded-[3px] border-zinc-300 bg-white/75 px-2 py-1">
+              polling {POLL_MS / 1000}s
             </Badge>
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            <button
-              type="button"
-              onClick={() => setSelectedPower("all")}
-              className={cn(
-                "rounded-[3px] border px-2 py-1 text-xs transition active:scale-[0.98]",
-                selectedPower === "all"
-                  ? "border-zinc-950 bg-zinc-950 text-white"
-                  : "border-zinc-300 bg-white/85 text-zinc-700 hover:bg-white",
-              )}
-            >
-              All {assetsWithLocation.length}
-            </button>
-            {powerCounts.map(([power, count]) => (
-              <button
-                key={power}
-                type="button"
-                onClick={() => setSelectedPower(power)}
-                className={cn(
-                  "rounded-[3px] border px-2 py-1 text-xs transition active:scale-[0.98]",
-                  selectedPower === power
-                    ? "border-zinc-950 bg-zinc-950 text-white"
-                    : "border-zinc-300 bg-white/85 text-zinc-700 hover:bg-white",
-                )}
-              >
-                {styleFor(power).label} {count}
-              </button>
-            ))}
+            {MODES.map((item) => {
+              const Icon = item.icon
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setMode(item.id)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-[4px] border px-2.5 py-1.5 text-xs font-medium transition active:scale-[0.98]",
+                    mode === item.id
+                      ? "border-zinc-950 bg-zinc-950 text-white"
+                      : "border-zinc-300 bg-white/85 text-zinc-700 hover:bg-white",
+                  )}
+                >
+                  <Icon className="size-3.5" />
+                  {item.label}
+                </button>
+              )
+            })}
           </div>
         </header>
 
-        <div className="absolute bottom-3 left-3 z-[2] flex max-w-[calc(100vw-1.5rem)] flex-wrap gap-2">
+        <div className="absolute bottom-3 left-3 z-[2] flex max-w-[calc(100vw-420px-2rem)] flex-wrap gap-2">
           <Button
             type="button"
             variant="outline"
-            onClick={() => void loadAssets()}
+            onClick={() => void loadDashboard()}
             disabled={loading || ingesting}
             className="rounded-[4px] border-zinc-300 bg-white/92 shadow-sm"
           >
@@ -460,24 +805,18 @@ function App() {
           )}
         </div>
 
-        {!loading && filteredAssets.length === 0 && (
-          <div className="absolute left-1/2 top-1/2 z-[2] w-[360px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-[4px] border border-zinc-300 bg-white p-4 text-center shadow-lg">
-            <h1 className="text-base font-semibold text-zinc-950">No mapped OSM power data</h1>
-            <p className="mt-2 text-sm leading-6 text-zinc-600">
-              Run the Hong Kong ingest to populate this development layer.
-            </p>
-            <Button
-              type="button"
-              onClick={() => void ingestHongKong()}
-              disabled={ingesting}
-              className="mt-4 rounded-[4px] bg-zinc-950 text-white hover:bg-zinc-800"
-            >
+        {!loading && assets.length === 0 && (
+          <div className="absolute left-1/2 top-1/2 z-[2] w-[360px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-[6px] border border-zinc-300 bg-white p-4 text-center shadow-lg">
+            <h1 className="text-base font-semibold text-zinc-950">No ingested grid assets</h1>
+            <p className="mt-2 text-sm leading-6 text-zinc-600">Run the Hong Kong ingest to populate the pipeline dashboard.</p>
+            <Button type="button" onClick={() => void ingestHongKong()} disabled={ingesting} className="mt-4 rounded-[4px] bg-zinc-950 text-white hover:bg-zinc-800">
               {ingesting ? <Loader2 className="size-4 animate-spin" /> : <Zap className="size-4" />}
               Ingest now
             </Button>
           </div>
         )}
 
+        <DiagnosticsPanel summary={summary} mode={mode} />
         <RawPanel asset={selectedAsset} onClose={() => setSelectedAssetId(null)} />
       </div>
     </main>
