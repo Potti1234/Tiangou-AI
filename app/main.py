@@ -48,6 +48,15 @@ def _row_dict(row: Any) -> dict[str, Any]:
     return dict(row)
 
 
+def _asset_row(row: Any) -> dict[str, Any]:
+    data = dict(row)
+    tags_json = data.pop("tags_json", None)
+    geometry_json = data.pop("geometry_json", None)
+    data["tags"] = json.loads(tags_json) if tags_json else {}
+    data["geometry"] = json.loads(geometry_json) if geometry_json else None
+    return data
+
+
 def _element_detail(row: Any) -> dict[str, Any]:
     data = dict(row)
     data["tags"] = json.loads(data.pop("tags_json"))
@@ -133,7 +142,7 @@ def assets(
 
     with get_db() as conn:
         return [
-            _row_dict(row)
+            _asset_row(row)
             for row in list_elements(
                 conn,
                 region_key=region_key,

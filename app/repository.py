@@ -147,7 +147,8 @@ def list_elements(
     return conn.execute(
         f"""
         SELECT e.osm_type, e.osm_id, e.power, e.name, e.voltage, e.operator,
-               e.frequency, e.cables, e.circuits, e.location, e.lat, e.lon, e.updated_at
+               e.frequency, e.cables, e.circuits, e.location, e.lat, e.lon,
+               e.tags_json, e.geometry_json, e.updated_at
         FROM osm_elements e
         {join}
         {where}
