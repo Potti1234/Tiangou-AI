@@ -978,7 +978,10 @@ def test_powermodels_preview_can_include_hk_intertie() -> None:
     assert exported_intertie["b_to"] > 0
     assert exported_intertie["b_us_per_km"] == 18.0
     assert exported_intertie["parameter_source"] == "public_interconnection_capacity_equivalent"
-    assert exported_intertie["confidence"] == 0.5
+    assert exported_intertie["confidence"] == 0.6
+    assert exported_intertie["parameter_provenance"] == "observed_public"
+    assert exported_intertie["import_boundary_id"] == "clp_hk_electric_interconnection"
+    assert exported_intertie["import_derate_scenarios"] == [1.0, 0.75, 0.5, 0.0]
     assert case["_metadata"]["provenance_summary"]["branch"]["public_interconnection_capacity_equivalent"] == 1
     assert validation["status"] == "warning"
     assert "severe_branch_voltage_mismatch" in {warning["code"] for warning in validation["warnings"]}

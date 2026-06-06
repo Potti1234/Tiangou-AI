@@ -8,6 +8,7 @@ from typing import Any
 from app.assumptions.lines import branch_parameter_defaults, line_lookup_voltage_metadata
 from app.assumptions.demand_profiles import hourly_load_metadata, hourly_profile_summary
 from app.assumptions.generators import equivalent_generator_defaults, generator_defaults, generator_lookup_metadata
+from app.assumptions.imports import import_boundary_defaults
 from app.assumptions.transformers import transformer_lookup_metadata, transformer_parameter_defaults
 from app.data_sources import CalibrationBundle, load_calibration_bundle
 
@@ -37,7 +38,6 @@ SYNTHETIC_CLP_SNAPSHOT_FACTORS = {
     "shoulder_10h": 0.75,
     "cooling_peak_18h": 1.12,
 }
-HK_INTERTIE_RATE_MVA = 720.0
 DEMAND_SNAPSHOTS = {
     "peak_16h": {
         "label": "Hong Kong 2024 peak demand, 16h representative snapshot",
@@ -2650,6 +2650,12 @@ def _powermodels_branch(
         "parameter_table_keys": defaults.get("parameter_table_keys"),
         "location_class": defaults.get("location_class"),
         "length_km": length_km,
+        "import_boundary_id": branch.get("import_boundary_id"),
+        "import_availability": branch.get("import_availability"),
+        "import_cost_class": branch.get("import_cost_class"),
+        "import_derate_scenarios": branch.get("import_derate_scenarios"),
+        "import_source": branch.get("import_source"),
+        "import_assumptions": branch.get("import_assumptions"),
         **({"transformer_inference": transformer_info} if transformer_info is not None else {}),
 }
 
@@ -2772,6 +2778,7 @@ def _hk_intertie_branches(
     hke_bus = _best_intertie_bus(buses, "hk-electric")
     if clp_bus is None or hke_bus is None:
         return []
+    import_defaults = import_boundary_defaults("clp_hk_electric_interconnection")
 
     voltage_kv = min(
         clp_bus.get("base_kv") or 132.0,
@@ -2806,13 +2813,13 @@ def _hk_intertie_branches(
                 "r_ohm_per_km": 0.055,
                 "x_ohm_per_km": 0.16,
                 "b_us_per_km": 18.0,
-                "rate_mva": round(HK_INTERTIE_RATE_MVA * derate, 3),
+                "rate_mva": round(float(import_defaults["nominal_mw"]) * derate, 3),
                 "matched_voltage_kv": voltage_kv,
                 "parameter_table": "underground_cable_defaults",
                 "parameter_source": "public_interconnection_capacity_equivalent",
                 "parameter_method": "public_intertie_capacity_with_cable_impedance_default",
-                "parameter_provenance": "observed_public",
-                "parameter_confidence": 0.5,
+                "parameter_provenance": import_defaults["provenance"],
+                "parameter_confidence": import_defaults["confidence"],
             },
             "endpoint_quality": [
                 {"snap": "synthetic_public_intertie", "bus_id": clp_bus["id"]},
@@ -2820,8 +2827,14 @@ def _hk_intertie_branches(
             ],
             "provenance": "public_interconnection_capacity_equivalent",
             "derate_factor": derate,
-            "nominal_rate_mva": HK_INTERTIE_RATE_MVA,
-            "confidence": 0.5,
+            "nominal_rate_mva": import_defaults["nominal_mw"],
+            "import_boundary_id": import_defaults["boundary_id"],
+            "import_availability": import_defaults["availability"],
+            "import_cost_class": import_defaults["cost_class"],
+            "import_derate_scenarios": import_defaults["derate_scenarios"],
+            "import_source": import_defaults["source"],
+            "import_assumptions": import_defaults["assumptions"],
+            "confidence": import_defaults["confidence"],
         }
     ]
 

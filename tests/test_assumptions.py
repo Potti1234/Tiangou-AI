@@ -4,6 +4,7 @@ from app import main
 from app.assumptions.data_centers import estimate_data_center_load
 from app.assumptions.demand_profiles import demand_profile_for_sector, hourly_load_metadata, hourly_profile_summary
 from app.assumptions.generators import generator_defaults
+from app.assumptions.imports import import_boundary_defaults
 from app.assumptions.lines import branch_parameter_defaults
 from app.assumptions.provenance import ASSUMPTION_TABLES, REQUIRED_PROVENANCE_COLUMNS, read_table_rows
 from app.assumptions.transformers import transformer_parameter_defaults
@@ -31,24 +32,26 @@ def test_assumption_csvs_have_required_provenance_columns() -> None:
     assert row_counts["data_center_site_assumptions"] == 3
     assert row_counts["generator_cost_availability_defaults"] == 10
     assert row_counts["generator_dispatch_merit_order"] == 10
+    assert row_counts["synthetic_contingency_library"] == 8
+    assert row_counts["cross_border_import_limits"] == 4
 
 
-def test_assumption_validation_summary_reports_enrichment_and_remaining_empty_tables() -> None:
+def test_assumption_validation_summary_reports_complete_enrichment_tables() -> None:
     payload = build_assumption_validation_summary()
 
     assert payload["schema"] == "tiangou.assumptions.validation_summary.v1"
-    assert payload["status"] == "warning"
+    assert payload["status"] == "ok"
     assert payload["table_count"] == 12
-    assert payload["row_count"] == 199
+    assert payload["row_count"] == 211
     assert payload["errors"] == []
-    assert {warning["code"] for warning in payload["warnings"]} == {"empty_table"}
+    assert payload["warnings"] == []
     assert set(payload["provenance_classes"]) == {
         "observed_public",
         "inferred_from_public_statistics",
         "synthetic_engineering_default",
     }
     assert all(table["status"] == "ok" for table in payload["tables"])
-    assert payload["provenance_counts"] == {"synthetic_engineering_default": 199}
+    assert payload["provenance_counts"] == {"observed_public": 1, "synthetic_engineering_default": 210}
 
 
 def test_line_assumption_lookup_scales_rating_and_exposes_provenance() -> None:
@@ -129,6 +132,15 @@ def test_generator_defaults_expose_cost_availability_and_provenance() -> None:
     assert defaults["synthetic_cost_provenance"] == "synthetic_engineering_default"
 
 
+def test_import_boundary_defaults_expose_derates_and_provenance() -> None:
+    defaults = import_boundary_defaults("clp_hk_electric_interconnection")
+
+    assert defaults["nominal_mw"] == 720.0
+    assert defaults["derate_scenarios"] == [1.0, 0.75, 0.5, 0.0]
+    assert defaults["availability"] == 0.95
+    assert defaults["provenance"] == "observed_public"
+
+
 def test_assumption_api_summary_and_drilldowns() -> None:
     with TestClient(main.app) as client:
         summary_response = client.get("/assumptions/summary")
@@ -151,8 +163,8 @@ def test_assumption_api_summary_and_drilldowns() -> None:
 
     summary_payload = summary_response.json()
     assert summary_payload["table_count"] == 12
-    assert summary_payload["status"] == "warning"
-    assert summary_payload["row_count"] == 199
+    assert summary_payload["status"] == "ok"
+    assert summary_payload["row_count"] == 211
     assert {table["key"] for table in lines_response.json()} == {
         "line_thermal_rating_defaults",
         "cable_impedance_defaults",
