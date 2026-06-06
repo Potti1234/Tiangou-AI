@@ -569,6 +569,13 @@ def _generator_capacity(tags: Mapping[str, Any]) -> tuple[float | None, str | No
     return None, None
 
 
+def _generator_source_tag(tags: Mapping[str, Any]) -> Any:
+    for key in ("generator:source", "plant:source", "source", "generator:fuel", "plant:fuel", "fuel"):
+        if tags.get(key):
+            return tags.get(key)
+    return None
+
+
 def _row_to_record(row: Any) -> dict[str, Any]:
     data = dict(row)
     tags = _load_json(data.pop("tags_json", None), {})
@@ -669,7 +676,7 @@ def build_topology_preview(
                     "bus_id": _bus_id_for_voltage_level(base_bus_id, max(record["voltage_kv"]) if record["voltage_kv"] else None, voltage_levels),
                     "name": record.get("name"),
                     "operator": record.get("operator") or record["tags"].get("operator"),
-                    "source": record["tags"].get("generator:source"),
+                    "source": _generator_source_tag(record["tags"]),
                     "method": record["tags"].get("generator:method"),
                     "pmax_mw": pmax_mw,
                     "capacity_tag": capacity_tag,
@@ -949,6 +956,7 @@ def topology_preview_to_powermodels(
             "area": 1,
             "zone": 1,
             "source_id": bus["id"],
+            "source_power": bus.get("power"),
             "name": bus.get("name"),
             "lat": bus.get("lat"),
             "lon": bus.get("lon"),
@@ -1316,17 +1324,34 @@ def _nearest_generator_connection_bus(
         return None
     point = (float(source_bus["lat"]), float(source_bus["lon"]))
     preferred_territory = source_bus.get("service_territory")
+    source_bus_id = source_bus.get("id")
     candidates = [
         bus
         for bus in buses
-        if bus.get("lat") is not None
+        if bus.get("id") != source_bus_id
+        and bus.get("power") in {"substation", "sub_station", "transformer", "terminal", "converter", "busbar", "bay", "switchgear", "switch"}
+        and bus.get("lat") is not None
         and bus.get("lon") is not None
-        and bus.get("power") in {"substation", "sub_station", "transformer", "plant", "generator", "busbar", "switchgear"}
         and (preferred_territory is None or bus.get("service_territory") in {None, preferred_territory})
         and bus.get("voltage_band") in {"extra_high_voltage", "high_voltage", "subtransmission", "unknown"}
     ]
     if not candidates:
-        candidates = [bus for bus in buses if bus.get("lat") is not None and bus.get("lon") is not None]
+        candidates = [
+            bus
+            for bus in buses
+            if bus.get("id") != source_bus_id
+            and bus.get("power") not in {"plant", "generator"}
+            and bus.get("lat") is not None
+            and bus.get("lon") is not None
+        ]
+    if not candidates:
+        candidates = [
+            bus
+            for bus in buses
+            if bus.get("id") != source_bus_id
+            and bus.get("lat") is not None
+            and bus.get("lon") is not None
+        ]
     if not candidates:
         return None
     return min(

@@ -769,7 +769,7 @@ def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
             "location": None,
             "lat": 22.32,
             "lon": 114.12,
-            "tags_json": '{"operator": "CLP Power", "generator:source": "gas", "generator:output:electricity": "800 MW"}',
+            "tags_json": '{"operator": "CLP Power", "plant:source": "gas", "generator:output:electricity": "800 MW"}',
             "geometry_json": None,
             "updated_at": "2026-01-01 00:00:00",
         },
@@ -1072,6 +1072,13 @@ def test_demo_full_osm_promotes_lamma_generators_with_synthetic_connections() ->
         "synthetic_connection_to_nearest_substation",
     ]
     assert lamma_power["gen_bus"] in {bus["bus_i"] for bus in case["bus"].values()}
+    assigned_bus_ids = {
+        generator["assigned_bus_id"]
+        for generator in case["gen"].values()
+        if generator["source_id"] in {"gen:way:246974322", "gen:way:323123016", "gen:way:323123015"}
+    }
+    bus_by_source = {bus["source_id"]: bus for bus in case["bus"].values()}
+    assert all(bus_by_source[bus_id]["source_power"] not in {"plant", "generator"} for bus_id in assigned_bus_ids)
 
     lamma_winds = [
         generator
