@@ -15,6 +15,7 @@ from app.repository import (
     complete_ingest_run,
     create_ingest_run,
     get_element,
+    latest_ingest_run,
     list_elements,
     summarize,
     upsert_elements,
@@ -304,6 +305,7 @@ def topology_pipeline_summary(
             region_key=region_key,
             limit=100000,
         )
+        latest_ingest = latest_ingest_run(conn, region_key)
 
     topology = build_topology_preview(
         rows,
@@ -336,9 +338,24 @@ def topology_pipeline_summary(
         "validation": validation["status"],
         "handoff_artifacts": handoff_artifacts["status"],
     }
+    latest_ingest_payload = dict(latest_ingest) if latest_ingest is not None else None
+    if latest_ingest_payload and latest_ingest_payload["status"] == "running":
+        stage_status.update(
+            {
+                "raw_osm": "running",
+                "reconstructed_circuits": "running",
+                "solver_topology": "running",
+                "validation": "running",
+            }
+        )
+    elif latest_ingest_payload and latest_ingest_payload["status"] == "failed" and not rows:
+        stage_status["raw_osm"] = "error"
     if not rows:
         stage_status["reconstructed_circuits"] = "not_run"
         stage_status["validation"] = "not_run"
+        if latest_ingest_payload and latest_ingest_payload["status"] == "running":
+            stage_status["reconstructed_circuits"] = "running"
+            stage_status["validation"] = "running"
 
     return {
         "region_key": region_key,
@@ -350,6 +367,7 @@ def topology_pipeline_summary(
             "min_voltage_kv": min_voltage_kv,
         },
         "stage_status": stage_status,
+        "latest_ingest_run": latest_ingest_payload,
         "raw_osm_counts_by_power": dict(sorted(raw_counts.items())),
         "topology_metadata": topology["metadata"],
         "quality": topology["quality"],

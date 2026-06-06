@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.config import settings
+from app.repository import create_ingest_run
 
 
 def test_health_initializes_database(tmp_path, monkeypatch) -> None:
@@ -154,3 +155,21 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert summary_payload["validation"]["metrics"]["island_count"] == 1
     assert summary_payload["handoff_artifacts"]["pyg_json"].endswith(".pyg.json")
     assert set(summary_payload["handoff_artifact_exists"]) == {"raw_json", "solvable_json", "pyg_json", "scenarios"}
+
+
+def test_pipeline_summary_reports_running_ingest_stage(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", tmp_path / "api.sqlite3")
+
+    with TestClient(main.app) as client:
+        with main.get_db() as conn:
+            ingest_run_id = create_ingest_run(conn, "hong-kong", "query")
+        response = client.get("/grid/topology/pipeline-summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["latest_ingest_run"]["id"] == ingest_run_id
+    assert payload["latest_ingest_run"]["status"] == "running"
+    assert payload["stage_status"]["raw_osm"] == "running"
+    assert payload["stage_status"]["reconstructed_circuits"] == "running"
+    assert payload["stage_status"]["solver_topology"] == "running"
+    assert payload["stage_status"]["validation"] == "running"

@@ -186,3 +186,16 @@ def summarize(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         ORDER BY er.region_key, count DESC, e.power
         """
     ).fetchall()
+
+
+def latest_ingest_run(conn: sqlite3.Connection, region_key: str) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT id, region_key, started_at, completed_at, element_count, status, error
+        FROM ingest_runs
+        WHERE region_key = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (region_key,),
+    ).fetchone()
