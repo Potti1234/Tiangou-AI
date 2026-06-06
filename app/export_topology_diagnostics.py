@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from app.database import connect
-from app.repository import list_elements
+from app.repository import list_consumer_proxy_allocation_rows, list_elements
 from app.topology import DEMAND_SNAPSHOTS, build_powermodels_preview, build_topology_diagnostics
 
 
@@ -24,6 +24,7 @@ def export_topology_diagnostics(
 ) -> dict[str, Any]:
     with connect(database_path) as conn:
         rows = list_elements(conn, region_key=region_key, limit=100000)
+        proxy_rows = list_consumer_proxy_allocation_rows(conn, region_key=region_key, limit=100000)
 
     case = build_powermodels_preview(
         rows,
@@ -32,6 +33,7 @@ def export_topology_diagnostics(
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
+        consumer_proxies=[dict(row) for row in proxy_rows],
     )
     diagnostics = build_topology_diagnostics(case)
     output_path.parent.mkdir(parents=True, exist_ok=True)

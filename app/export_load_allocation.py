@@ -4,8 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from app.database import connect
-from app.load_proxies import rows_to_consumer_proxies
-from app.repository import list_consumer_proxy_elements, list_elements
+from app.repository import list_consumer_proxy_allocation_rows, list_elements
 from app.topology import DEMAND_SNAPSHOTS, build_topology_preview
 
 
@@ -25,7 +24,7 @@ def export_hk_electric_load_allocation(
 ) -> dict[str, Any]:
     with connect(database_path) as conn:
         rows = list_elements(conn, region_key=region_key, limit=100000)
-        proxy_rows = list_consumer_proxy_elements(conn, region_key=region_key, limit=100000)
+        proxy_rows = list_consumer_proxy_allocation_rows(conn, region_key=region_key, limit=100000)
 
     topology = build_topology_preview(
         rows,
@@ -34,7 +33,7 @@ def export_hk_electric_load_allocation(
         include_hk_interties=include_hk_interties,
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
-        consumer_proxies=rows_to_consumer_proxies(proxy_rows),
+        consumer_proxies=[dict(row) for row in proxy_rows],
     )
     loads = list(topology["loads"])
     missing_provenance = [load["id"] for load in loads if not load.get("provenance")]
