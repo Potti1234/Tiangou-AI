@@ -78,14 +78,19 @@ class DualTimelineSimulation:
             delta_P_B = state_B.Pm - state_B.Pe
 
             # ── PINN closed-loop trajectory regulation ───────────────────
-            # Run every step while frequency is falling.  The PINN's 60-second
-            # physics rollout already reflects any previously applied actions
-            # (they updated Pm/Pe in the simulator), so the loop is naturally
-            # closed: each call sees the remaining shortfall after prior actions.
+            # Trigger on EITHER:
+            #   (a) PINN-predicted nadir < 49.5 Hz — purely predictive; fires
+            #       the moment the physics rollout sees an upcoming shortfall,
+            #       even before frequency has moved at all.
+            #   (b) df/dt < −0.02 Hz/s — safety net for excursions that develop
+            #       faster than the trajectory window can project.
+            # Because the trajectory is ramp-aware, condition (a) fires at the
+            # very first step the ramp appears in the PINN's lookahead, giving
+            # slow-start assets (CCGTs, SC) the maximum possible lead time.
             traj = state_B.trajectory_60s
-            physics_min_f = min(traj) if traj else state_B.f - abs(state_B.df_dt) * 60
+            traj_nadir = min(traj) if traj else state_B.f - abs(state_B.df_dt) * 60
 
-            if state_B.df_dt < -0.02:   # frequency genuinely falling
+            if traj_nadir < 49.5 or state_B.df_dt < -0.02:
                 gov_types = ("coal", "gas_ccgt", "nuclear")
                 thermal = [
                     s for s in sim_B.get_all_sources()

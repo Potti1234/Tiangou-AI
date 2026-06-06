@@ -124,6 +124,19 @@ HK_GRID_BASELINE = {
             "weather_dependent": False,
         },
     ],
+    "bess": [
+        {
+            "name": "HK Grid Battery Storage",
+            "type": "bess",
+            "capacity_mw": 200,
+            "H": 0.0,              # inverter-coupled — no rotational inertia
+            "online": False,
+            "current_output_mw": 0,
+            "weather_dependent": False,
+            # No ramp_rate_mw_per_min — response is sub-cycle (≤200 ms),
+            # treated as instantaneous within the 1-second timestep.
+        },
+    ],
 }
 
 # Typical HK weekday demand profile [hour -> MW]

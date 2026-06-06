@@ -12,6 +12,17 @@ S_BASE = 12000.0
 
 INTERVENTION_ACTIONS = [
     {
+        "id": "start_bess",
+        "description": "Dispatch battery storage (+200 MW instant response)",
+        "type": "generation_increase",
+        "source": "HK Grid Battery Storage",
+        "delta_mw": +200,
+        "delta_H": 0.0,            # inverter-coupled, no inertia contribution
+        "lead_time_s": 0,          # sub-cycle response — fires in the same step
+        "cost_per_mwh": 20,
+        "co2_kg_per_mwh": 0,
+    },
+    {
         "id": "shed_ev_charging",
         "description": "Interrupt EV charging stations (−22.5 MW demand reduction)",
         "type": "demand_reduction",
@@ -138,6 +149,11 @@ class DispatchEngine:
 
         return actions
 
+    # Hot-standby lead time for generation assets when PINN dispatches early.
+    # The PINN fires during df/dt < −0.02 which gives operators enough advance
+    # notice to pre-warm turbines — 60 s vs 120 s cold-start.
+    _HOT_STANDBY_S = 60
+
     def regulate_on_trajectory(
         self,
         trajectory: List[float],
@@ -157,10 +173,16 @@ class DispatchEngine:
         """
         Trajectory-driven closed-loop regulation.
 
-        For each available intervention, runs a hypothetical 60-second trajectory
-        with that action applied (using the same PINN physics rollout) and measures
-        the predicted nadir improvement.  Returns the minimum cost-effective set of
-        actions required to lift the nadir above target_nadir.
+        For each available intervention, runs a hypothetical trajectory with
+        that action applied (using the PINN physics rollout) and measures the
+        predicted nadir improvement.  Generation assets use hot-standby lead
+        (60 s) since the PINN fires early enough to pre-warm turbines.
+
+        The evaluation horizon matches the action's effective lead time so that
+        slow-start generation actions are assessed over a window long enough to
+        capture when they actually arrive:
+          • Fast actions  (lead ≤ 30 s): 60 s horizon
+          • CCGTs (60 s hot-standby)   : 180 s horizon (nadir visible at t≈90)
 
         Because this is called every simulation step, each call already sees the
         updated Pm/Pe reflecting any previously applied actions — the loop is
@@ -188,36 +210,51 @@ class DispatchEngine:
 
             if atype in ("demand_reduction", "demand_reduction_direct"):
                 dPe = action["delta_mw"]     # negative — reduces effective demand
+                effective_lead = action["lead_time_s"]
+                horizon = max(60, effective_lead + 30)
             elif atype == "generation_increase":
                 dPm = action["delta_mw"]     # positive — adds generation
+                original_lead = action["lead_time_s"]
+                if original_lead > 30:
+                    # Slow-start asset (CCGT): override to hot-standby lead since
+                    # the PINN dispatches early enough to pre-warm the turbine.
+                    effective_lead = self._HOT_STANDBY_S
+                    horizon = effective_lead + 120
+                else:
+                    # Fast-response asset (BESS, spinning reserve): keep its
+                    # own lead time and a standard 60 s evaluation window.
+                    effective_lead = original_lead
+                    horizon = max(60, effective_lead + 30)
             elif atype == "inertia_only":
-                # Synchronous condenser doesn't shift the steady-state nadir but
-                # slows RoCoF, improving stability margins.  Assign a small fixed
-                # improvement so it's always included when fast actions are selected.
+                # SC doesn't shift the steady-state nadir but slows RoCoF
                 candidates.append({
                     **action,
+                    "lead_time_s":         action["lead_time_s"],
                     "_baseline_nadir_hz":  round(baseline_nadir, 3),
                     "_predicted_nadir_hz": round(baseline_nadir + 0.05, 3),
                     "_improvement_hz":     0.05,
                 })
                 continue
+            else:
+                continue
 
             hypo_traj = predict_trajectory(
                 pinn_model,
                 t_start=0, f0=f0,
-                Pm=Pm_eff + dPm,    # Pm_eff already includes governor
+                Pm=Pm_eff + dPm,
                 Pe=Pe + dPe,
                 renewable_frac=0.0, H_prior=0.0,
                 gov_cap=gov_cap, gov_output_init=gov_output_init,
                 gov_headroom=gov_headroom,
                 gen_ramp_mw=gen_ramp_mw, gen_ramp_rate=gen_ramp_rate,
-                dem_ramp_mw=dem_ramp_mw,
-                dem_ramp_rate=dem_ramp_rate,
+                dem_ramp_mw=dem_ramp_mw, dem_ramp_rate=dem_ramp_rate,
+                horizon_s=horizon,
             )
             hypo_nadir = min(hypo_traj)
             improvement = hypo_nadir - baseline_nadir
             candidates.append({
                 **action,
+                "lead_time_s":         effective_lead,
                 "_baseline_nadir_hz":  round(baseline_nadir, 3),
                 "_predicted_nadir_hz": round(hypo_nadir, 3),
                 "_improvement_hz":     round(improvement, 4),
