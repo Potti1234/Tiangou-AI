@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   AlertTriangle,
   Building2,
@@ -21,9 +21,30 @@ import {
   X,
   Zap,
 } from "lucide-react"
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  XAxis,
+  YAxis,
+} from "recharts"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart"
 import {
   Map,
   MapControls,
@@ -32,6 +53,8 @@ import {
   MarkerContent,
   MarkerTooltip,
 } from "@/components/ui/map"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
 type OSMGeometryPoint = {
@@ -263,6 +286,65 @@ type DashboardSnapshot = {
   topology: TopologyPreview
   powermodels_case: PowerModelsCase
   summary: PipelineSummary
+}
+
+type AnalyticsCountRow = {
+  key: string
+  label: string
+  count?: number
+  mw?: number
+  value?: number
+}
+
+type AnalyticsRiskRow = BaselineRiskItem & {
+  connected_load_mw?: number
+  load_proximity_mw?: number
+}
+
+type AnalyticsDashboardPayload = {
+  schema: string
+  metadata_cards: {
+    buses: number
+    branches: number
+    loads: number
+    generators: number
+    total_demand_mw: number
+    total_pmax_mw: number
+    reserve_margin: number | null
+    island_count: number
+    synthetic_branch_share: number
+    severe_voltage_mismatch_count: number
+    observed_inferred_synthetic_row_counts: Record<string, number>
+  }
+  charts: {
+    load_by_sector: AnalyticsCountRow[]
+    load_by_provenance_class: AnalyticsCountRow[]
+    generation_capacity_by_source: Array<{ energy_source: string; resource_type: string; pmax_mw: number }>
+    branch_by_voltage_level: Array<{ voltage_level: string; branch_count: number; thermal_rating_mva: number }>
+    branch_provenance_counts: AnalyticsCountRow[]
+    bus_provenance_counts: AnalyticsCountRow[]
+    weak_spot_risk_top_branches: AnalyticsRiskRow[]
+    weak_spot_risk_top_buses: AnalyticsRiskRow[]
+    low_confidence_assumption_counts: Array<{ category: string; count: number; example?: { assumption?: string; confidence?: number } | null }>
+    consumer_proxy_counts_by_category: AnalyticsCountRow[]
+    data_center_estimated_mw_top_sites: Array<{ id: string; name: string; estimated_facility_mw: number; estimated_it_mw: number; provenance: string; confidence: number }>
+    demand_snapshots: Array<{ snapshot: string; total_demand_mw: number; total_pmax_mw: number; reserve_margin: number | null }>
+  }
+  transparency: {
+    provenance_classes: Record<string, string>
+    synthetic_note: string
+  }
+  solver_artifacts: {
+    status: StageStatus
+    raw_powermodels_export_generated: boolean
+    gridsfm_relaxed_solvable_json_generated: boolean
+    pyg_export_generated: boolean
+    scenario_files_generated: boolean
+    manifest_path: string
+    manifest_exists: boolean
+    manifest_export_count: number
+    feasibility_warning: string
+  }
 }
 
 type ConsumerProxyMarker = {
@@ -678,6 +760,283 @@ function BaselineRiskList({ title, items }: { title: string; items: BaselineRisk
   )
 }
 
+const chartPalette = [
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
+  "var(--chart-6)",
+]
+
+const demandChartConfig = {
+  total_demand_mw: { label: "Demand MW", color: "var(--chart-1)" },
+  total_pmax_mw: { label: "Pmax MW", color: "var(--chart-2)" },
+} satisfies ChartConfig
+
+const valueChartConfig = {
+  mw: { label: "MW", color: "var(--chart-1)" },
+  count: { label: "Count", color: "var(--chart-3)" },
+  pmax_mw: { label: "Pmax MW", color: "var(--chart-2)" },
+  branch_count: { label: "Branches", color: "var(--chart-4)" },
+  thermal_rating_mva: { label: "Thermal MVA", color: "var(--chart-5)" },
+  risk_score: { label: "Risk score", color: "var(--chart-1)" },
+  estimated_facility_mw: { label: "Facility MW", color: "var(--chart-3)" },
+} satisfies ChartConfig
+
+function formatPercent(value: unknown, digits = 1) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "n/a"
+  return `${formatNumber(value * 100, digits)}%`
+}
+
+function metricHelp(text: string) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button type="button" className="grid size-4 place-items-center rounded-full border border-zinc-300 text-[10px] text-zinc-500">
+          ?
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{text}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function KpiCard({ label, value, help }: { label: string; value: string; help?: string }) {
+  return (
+    <Card size="sm" className="rounded-[6px] bg-white/78 py-3">
+      <CardHeader className="px-3">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-[11px] font-medium uppercase tracking-[0.08em] text-zinc-500">{label}</CardTitle>
+          {help ? metricHelp(help) : null}
+        </div>
+      </CardHeader>
+      <CardContent className="px-3">
+        <p className="text-lg font-semibold tabular-nums text-zinc-950">{value}</p>
+      </CardContent>
+    </Card>
+  )
+}
+
+function ChartPanel({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <Card size="sm" className="rounded-[6px] bg-white/78">
+      <CardHeader className="px-3">
+        <CardTitle className="text-sm">{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="px-3">
+        {children}
+      </CardContent>
+    </Card>
+  )
+}
+
+function EmptyChart({ label }: { label: string }) {
+  return (
+    <div className="grid h-[180px] place-items-center rounded-[4px] border border-zinc-200 bg-zinc-50 text-xs text-zinc-500">
+      {label}
+    </div>
+  )
+}
+
+function AnalyticsBarChart({
+  data,
+  dataKey,
+  labelKey = "label",
+  layout = "horizontal",
+}: {
+  data: Array<Record<string, unknown>>
+  dataKey: string
+  labelKey?: string
+  layout?: "horizontal" | "vertical"
+}) {
+  if (!data.length) return <EmptyChart label="No chart rows available." />
+  const vertical = layout === "vertical"
+  return (
+    <ChartContainer config={valueChartConfig} className="h-[210px] min-h-[210px] w-full">
+      <BarChart accessibilityLayer data={data} layout={vertical ? "vertical" : "horizontal"} margin={{ left: vertical ? 8 : 0, right: 8, top: 8, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" horizontal={!vertical} vertical={vertical} />
+        {vertical ? (
+          <>
+            <XAxis type="number" hide />
+            <YAxis dataKey={labelKey} type="category" width={96} tickLine={false} axisLine={false} tick={{ fontSize: 10 }} />
+          </>
+        ) : (
+          <>
+            <XAxis dataKey={labelKey} tickLine={false} axisLine={false} tick={{ fontSize: 10 }} interval={0} tickFormatter={(value) => String(value).slice(0, 12)} />
+            <YAxis width={36} tickLine={false} axisLine={false} tick={{ fontSize: 10 }} />
+          </>
+        )}
+        <ChartTooltip cursor={false} content={<ChartTooltipContent />} />
+        <Bar dataKey={dataKey} fill={`var(--color-${dataKey})`} radius={vertical ? [0, 4, 4, 0] : [4, 4, 0, 0]} />
+      </BarChart>
+    </ChartContainer>
+  )
+}
+
+function AnalyticsPieChart({ data }: { data: AnalyticsCountRow[] }) {
+  if (!data.length) return <EmptyChart label="No provenance rows available." />
+  return (
+    <ChartContainer config={valueChartConfig} className="h-[210px] min-h-[210px] w-full">
+      <PieChart accessibilityLayer>
+        <ChartTooltip content={<ChartTooltipContent nameKey="label" />} />
+        <Pie data={data} dataKey="count" nameKey="label" innerRadius={46} outerRadius={78} paddingAngle={2}>
+          {data.map((entry, index) => (
+            <Cell key={entry.key} fill={chartPalette[index % chartPalette.length]} />
+          ))}
+        </Pie>
+        <ChartLegend content={<ChartLegendContent nameKey="label" />} />
+      </PieChart>
+    </ChartContainer>
+  )
+}
+
+function AnalyticsDashboardTabs({ analytics }: { analytics: AnalyticsDashboardPayload | null }) {
+  if (!analytics) {
+    return (
+      <Card size="sm" className="rounded-[6px] bg-white/78">
+        <CardContent className="px-3 py-3 text-xs text-zinc-500">Analytics payload is loading.</CardContent>
+      </Card>
+    )
+  }
+
+  const cards = analytics.metadata_cards
+  const branchRisks = analytics.charts.weak_spot_risk_top_branches.map((item) => ({
+    ...item,
+    label: item.source_id ?? item.branch_id ?? "branch",
+  }))
+  const busRisks = analytics.charts.weak_spot_risk_top_buses.map((item) => ({
+    ...item,
+    label: item.source_id ?? item.bus_id ?? "bus",
+  }))
+  const generationRows = analytics.charts.generation_capacity_by_source.map((row) => ({
+    ...row,
+    label: `${row.energy_source} ${row.resource_type}`.replaceAll("_", " "),
+  }))
+  const artifactRows = [
+    ["Raw PowerModels export generated", analytics.solver_artifacts.raw_powermodels_export_generated],
+    ["GridSFM relaxed/solvable JSON generated", analytics.solver_artifacts.gridsfm_relaxed_solvable_json_generated],
+    ["PyG export generated", analytics.solver_artifacts.pyg_export_generated],
+    ["Scenario files generated", analytics.solver_artifacts.scenario_files_generated],
+  ] as const
+
+  return (
+    <TooltipProvider>
+      <Tabs defaultValue="overview" className="gap-3">
+        <TabsList className="grid w-full grid-cols-3 gap-0 sm:grid-cols-6">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="demand">Demand</TabsTrigger>
+          <TabsTrigger value="generation">Generation</TabsTrigger>
+          <TabsTrigger value="network">Network</TabsTrigger>
+          <TabsTrigger value="weak-spots">Weak Spots</TabsTrigger>
+          <TabsTrigger value="assumptions">Assumptions</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <KpiCard label="Buses" value={formatNumber(cards.buses)} />
+            <KpiCard label="Branches" value={formatNumber(cards.branches)} />
+            <KpiCard label="Demand" value={`${formatNumber(cards.total_demand_mw, 1)} MW`} />
+            <KpiCard label="Reserve" value={formatPercent(cards.reserve_margin)} help="Estimated Pmax minus demand, divided by demand." />
+          </div>
+          <ChartPanel title="Demand snapshots">
+            <ChartContainer config={demandChartConfig} className="h-[220px] min-h-[220px] w-full">
+              <AreaChart accessibilityLayer data={analytics.charts.demand_snapshots} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="snapshot" tickLine={false} axisLine={false} tick={{ fontSize: 10 }} tickFormatter={(value) => String(value).replace("_", " ")} />
+                <YAxis width={44} tickLine={false} axisLine={false} tick={{ fontSize: 10 }} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Area type="monotone" dataKey="total_pmax_mw" stroke="var(--color-total_pmax_mw)" fill="var(--color-total_pmax_mw)" fillOpacity={0.18} />
+                <Area type="monotone" dataKey="total_demand_mw" stroke="var(--color-total_demand_mw)" fill="var(--color-total_demand_mw)" fillOpacity={0.26} />
+                <ChartLegend content={<ChartLegendContent />} />
+              </AreaChart>
+            </ChartContainer>
+          </ChartPanel>
+          <ChartPanel title="Load by provenance">
+            <AnalyticsPieChart data={analytics.charts.load_by_provenance_class.map((row) => ({ ...row, count: Math.round(row.mw ?? 0) }))} />
+          </ChartPanel>
+        </TabsContent>
+
+        <TabsContent value="demand" className="space-y-3">
+          <ChartPanel title="Sector load">
+            <AnalyticsBarChart data={analytics.charts.load_by_sector} dataKey="mw" layout="vertical" />
+          </ChartPanel>
+          <ChartPanel title="Consumer proxy categories">
+            <AnalyticsBarChart data={analytics.charts.consumer_proxy_counts_by_category} dataKey="count" layout="vertical" />
+          </ChartPanel>
+          <ChartPanel title="Top data-center estimated facility MW">
+            <AnalyticsBarChart data={analytics.charts.data_center_estimated_mw_top_sites.map((row) => ({ ...row, label: row.name }))} dataKey="estimated_facility_mw" layout="vertical" />
+          </ChartPanel>
+        </TabsContent>
+
+        <TabsContent value="generation" className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <KpiCard label="Generators" value={formatNumber(cards.generators)} />
+            <KpiCard label="Pmax" value={`${formatNumber(cards.total_pmax_mw, 1)} MW`} />
+          </div>
+          <ChartPanel title="Generation capacity by source">
+            <AnalyticsBarChart data={generationRows} dataKey="pmax_mw" layout="vertical" />
+          </ChartPanel>
+        </TabsContent>
+
+        <TabsContent value="network" className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <KpiCard label="Islands" value={formatNumber(cards.island_count)} />
+            <KpiCard label="Synthetic share" value={formatPercent(cards.synthetic_branch_share)} />
+          </div>
+          <ChartPanel title="Branch count by voltage">
+            <AnalyticsBarChart data={analytics.charts.branch_by_voltage_level.map((row) => ({ ...row, label: row.voltage_level }))} dataKey="branch_count" />
+          </ChartPanel>
+          <ChartPanel title="Branch provenance">
+            <AnalyticsPieChart data={analytics.charts.branch_provenance_counts} />
+          </ChartPanel>
+          <ChartPanel title="Bus provenance">
+            <AnalyticsPieChart data={analytics.charts.bus_provenance_counts} />
+          </ChartPanel>
+        </TabsContent>
+
+        <TabsContent value="weak-spots" className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <KpiCard label="Severe mismatches" value={formatNumber(cards.severe_voltage_mismatch_count)} />
+            <KpiCard label="Synthetic branches" value={formatPercent(cards.synthetic_branch_share)} />
+          </div>
+          <ChartPanel title="Top weak branches">
+            <AnalyticsBarChart data={branchRisks} dataKey="risk_score" layout="vertical" />
+          </ChartPanel>
+          <ChartPanel title="Top weak buses">
+            <AnalyticsBarChart data={busRisks} dataKey="risk_score" layout="vertical" />
+          </ChartPanel>
+        </TabsContent>
+
+        <TabsContent value="assumptions" className="space-y-3">
+          <ChartPanel title="Observed, inferred, synthetic rows">
+            <div className="space-y-2">
+              <CountBadges counts={cards.observed_inferred_synthetic_row_counts} />
+              <p className="text-xs leading-5 text-zinc-600">{analytics.transparency.synthetic_note}</p>
+            </div>
+          </ChartPanel>
+          <ChartPanel title="Low-confidence assumptions by category">
+            <AnalyticsBarChart data={analytics.charts.low_confidence_assumption_counts.map((row) => ({ ...row, label: row.category }))} dataKey="count" layout="vertical" />
+          </ChartPanel>
+          <ChartPanel title="Solver artifact status">
+            <div className="space-y-1.5">
+              {artifactRows.map(([label, ok]) => (
+                <div key={label} className="flex items-center justify-between gap-2 rounded-[4px] border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-xs">
+                  <span className="text-zinc-600">{label}</span>
+                  <Badge variant="outline" className={cn("rounded-[3px]", ok ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-amber-300 bg-amber-50 text-amber-900")}>
+                    {ok ? "yes" : "not yet"}
+                  </Badge>
+                </div>
+              ))}
+              <p className="text-xs leading-5 text-amber-900">{analytics.solver_artifacts.feasibility_warning}</p>
+            </div>
+          </ChartPanel>
+        </TabsContent>
+      </Tabs>
+    </TooltipProvider>
+  )
+}
+
 function RawMarker({ asset, selected }: { asset: GridAsset; selected: boolean }) {
   const style = styleFor(asset.power)
   const Icon = style.icon
@@ -768,11 +1127,13 @@ function DiagnosticsPanel({
   summary,
   assumptions,
   consumerProxies,
+  analytics,
   mode,
 }: {
   summary: PipelineSummary | null
   assumptions: AssumptionTransparency | null
   consumerProxies: ConsumerProxyMarker[]
+  analytics: AnalyticsDashboardPayload | null
   mode: Mode
 }) {
   const counts = summary?.raw_osm_counts_by_power ?? {}
@@ -844,6 +1205,10 @@ function DiagnosticsPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
+        <section>
+          <AnalyticsDashboardTabs analytics={analytics} />
+        </section>
+
         <section>
           <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Stage status</h2>
           <div className="mt-2 grid grid-cols-2 gap-1.5">
@@ -1200,6 +1565,7 @@ function App() {
   const [topology, setTopology] = useState<TopologyPreview | null>(null)
   const [caseData, setCaseData] = useState<PowerModelsCase | null>(null)
   const [summary, setSummary] = useState<PipelineSummary | null>(null)
+  const [analytics, setAnalytics] = useState<AnalyticsDashboardPayload | null>(null)
   const [mode, setMode] = useState<Mode>("raw")
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -1220,6 +1586,7 @@ function App() {
     try {
       const [
         response,
+        analyticsResponse,
         consumerResponse,
         assumptionSummaryResponse,
         assumptionLinesResponse,
@@ -1231,6 +1598,9 @@ function App() {
         assumptionImportsResponse,
       ] = await Promise.all([
         fetch(`${API_BASE_URL}/grid/dashboard-snapshot?${query}`, {
+          signal: controller.signal,
+        }),
+        fetch(`${API_BASE_URL}/grid/analytics-dashboard?${query}`, {
           signal: controller.signal,
         }),
         fetch(`${API_BASE_URL}/grid/consumer-proxies/important?region_key=hong-kong&limit=${IMPORTANT_CONSUMER_LIMIT}`, {
@@ -1246,6 +1616,7 @@ function App() {
         fetch(`${API_BASE_URL}/assumptions/imports`, { signal: controller.signal }),
       ])
       if (!response.ok) throw new Error(`API returned ${response.status}`)
+      if (!analyticsResponse.ok) throw new Error(`Analytics API returned ${analyticsResponse.status}`)
       if (!consumerResponse.ok) throw new Error(`Consumer proxy API returned ${consumerResponse.status}`)
       const assumptionResponses = [
         assumptionSummaryResponse,
@@ -1259,6 +1630,7 @@ function App() {
       ]
       if (assumptionResponses.some((item) => !item.ok)) throw new Error("Assumption API returned an error")
       const snapshot = await response.json() as DashboardSnapshot
+      const analyticsPayload = await analyticsResponse.json() as AnalyticsDashboardPayload
       const importantConsumerProxies = await consumerResponse.json() as ConsumerProxyMarker[]
       const assumptionSummary = await assumptionSummaryResponse.json() as AssumptionSummary
       const assumptionTableGroups = await Promise.all([
@@ -1274,6 +1646,7 @@ function App() {
       setAssets(snapshot.assets)
       setConsumerProxies(importantConsumerProxies)
       setAssumptions({ summary: assumptionSummary, tables: assumptionTables })
+      setAnalytics(analyticsPayload)
       setTopology(snapshot.topology)
       setCaseData(snapshot.powermodels_case)
       setSummary(snapshot.summary)
@@ -1725,7 +2098,7 @@ function App() {
           </div>
         )}
 
-        <DiagnosticsPanel summary={summary} assumptions={assumptions} consumerProxies={consumerProxies} mode={mode} />
+        <DiagnosticsPanel summary={summary} assumptions={assumptions} consumerProxies={consumerProxies} analytics={analytics} mode={mode} />
         <RawPanel asset={selectedAsset} onClose={() => setSelectedAssetId(null)} />
       </div>
     </main>
