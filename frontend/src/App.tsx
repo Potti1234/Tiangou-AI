@@ -1686,6 +1686,9 @@ function AnalyticsHeader({
           <Button asChild variant="outline" className="rounded-[4px] border-zinc-300 bg-white/92">
             <Link to="/">Map</Link>
           </Button>
+          <Button asChild variant="outline" className="rounded-[4px] border-zinc-300 bg-white/92">
+            <Link to="/dynamic">Dynamic</Link>
+          </Button>
           <Button type="button" variant="outline" onClick={onRefresh} disabled={loading} className="rounded-[4px] border-zinc-300 bg-white/92">
             <RotateCcw className={cn("size-4", loading && "animate-spin")} />
             Refresh
@@ -2227,6 +2230,9 @@ function App() {
             </Badge>
             <Button asChild size="sm" variant="outline" className="h-6 rounded-[4px] border-zinc-300 bg-white/85 px-2 text-xs">
               <Link to="/analytics">Analytics</Link>
+            </Button>
+            <Button asChild size="sm" variant="outline" className="h-6 rounded-[4px] border-zinc-300 bg-white/85 px-2 text-xs">
+              <Link to="/dynamic">Dynamic</Link>
             </Button>
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">

@@ -86,3 +86,22 @@ def test_map_dashboard_does_not_fetch_analytics_route_payload() -> None:
 
     assert "/grid/analytics-dashboard" not in app_body
     assert "function AnalyticsPage()" in source
+
+
+def test_frontend_dynamic_route_and_page_use_dynamic_api() -> None:
+    main_source = Path("frontend/src/main.tsx").read_text(encoding="utf-8")
+    app_source = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+    page_source = Path("frontend/src/pages/DynamicSimulationPage.tsx").read_text(encoding="utf-8")
+
+    assert "path: '/dynamic'" in main_source
+    assert "component: DynamicSimulationPage" in main_source
+    assert '<Link to="/dynamic">Dynamic</Link>' in app_source
+    assert "/dynamic/scenarios" in page_source
+    assert "/dynamic/simulate" in page_source
+    assert "Before intervention" in page_source
+    assert "After PINN dispatch" in page_source
+    assert "PINN H" in page_source
+    assert "Frequency timeline" in page_source
+    assert "Inertia H" in page_source
+    assert "Real grid derived" in page_source
+    assert "synthetic_assumption_counts" in page_source

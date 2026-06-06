@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router'
 import './index.css'
 import App, { AnalyticsPage } from './App.tsx'
+import { DynamicSimulationPage } from './pages/DynamicSimulationPage.tsx'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 const rootRoute = createRootRoute()
@@ -19,8 +20,14 @@ const analyticsRoute = createRoute({
   component: AnalyticsPage,
 })
 
+const dynamicRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/dynamic',
+  component: DynamicSimulationPage,
+})
+
 const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, analyticsRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, analyticsRoute, dynamicRoute]),
 })
 
 declare module '@tanstack/react-router' {
