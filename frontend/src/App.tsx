@@ -122,6 +122,8 @@ type PowerModelsBranch = {
   circuit_class?: string | null
   circuit_count?: number | null
   provenance: string | null
+  retention_policy?: string | null
+  solver_retention_reason?: string | null
   confidence: number | null
 }
 
@@ -144,6 +146,12 @@ type PowerModelsGen = {
   resource_type: string
   provenance: string | null
   service_territory: string | null
+  energy_source?: string | null
+  capacity_tag?: string | null
+  confidence?: number | null
+  connection_method?: string | null
+  assigned_bus_id?: string | null
+  original_bus_id?: string | null
 }
 
 type PowerModelsCase = {
@@ -957,7 +965,7 @@ function App() {
   const loadInFlight = useRef(false)
   const dashboardAbort = useRef<AbortController | null>(null)
 
-  const query = "region_key=hong-kong&include_hk_interties=true&min_voltage_kv=100&asset_limit=5000"
+  const query = "region_key=hong-kong&include_hk_interties=true&solver_include_policy=demo_full_osm&include_synthetic_generator_connections=true&asset_limit=5000"
 
   const loadDashboard = async (showLoading = true) => {
     if (loadInFlight.current) dashboardAbort.current?.abort()
@@ -1123,14 +1131,15 @@ function App() {
       const coordinates = solverBranchCoordinates(branch)
       if (coordinates.length < 2) return []
       const mismatch = voltageMismatchSourceIds.has(branch.source_id)
-      const synthetic = branch.provenance?.includes("public") || branch.source_id.startsWith("synthetic:")
+      const synthetic = branch.provenance?.includes("public") || branch.provenance?.includes("synthetic") || branch.source_id.startsWith("synthetic:")
+      const generatorConnection = branch.provenance === "synthetic_connection_to_nearest_substation"
       return [{
         id: `solver-${id}`,
-        label: branch.source_id,
+        label: generatorConnection ? "Synthetic generator connection" : branch.source_id,
         coordinates,
-        color: mode === "validation" && mismatch ? "#dc2626" : synthetic ? "#2563eb" : "#15803d",
+        color: mode === "validation" && mismatch ? "#dc2626" : generatorConnection ? "#7c3aed" : synthetic ? "#2563eb" : "#15803d",
         width: mode === "validation" && mismatch ? 6 : 4,
-        opacity: mode === "handoff" ? 0.45 : 0.9,
+        opacity: mode === "handoff" ? 0.45 : generatorConnection ? 0.72 : 0.9,
         dashArray: branch.transformer || synthetic ? [3, 2] as [number, number] : undefined,
       }]
     })
@@ -1209,15 +1218,25 @@ function App() {
       const coord = coordinateForBus(bus?.source_id)
       if (!coord) continue
       const pmaxMw = gen.pmax * 100
+      const equivalent = gen.resource_type.includes("equivalent")
       points.push({
         id: `gen-${id}`,
-        label: gen.resource_type,
+        label: equivalent ? gen.resource_type : (gen.energy_source ? `${gen.energy_source} generator` : "OSM generator"),
         longitude: coord[0],
         latitude: coord[1],
-        color: gen.resource_type.includes("equivalent") ? "#2563eb" : "#111827",
+        color: equivalent ? "#2563eb" : gen.provenance === "inferred_generator_connection" ? "#7c2d12" : "#111827",
         size: Math.max(16, Math.min(40, 12 + Math.sqrt(pmaxMw) / 2)),
-        icon: gen.resource_type.includes("equivalent") ? Database : Factory,
-        meta: [["Layer", "Solver generator"], ["Pmax MW", formatNumber(pmaxMw, 1)], ["Bus", String(gen.gen_bus)]],
+        icon: equivalent ? Database : gen.energy_source === "wind" ? Zap : Factory,
+        meta: [
+          ["Layer", "Solver generator"],
+          ["Pmax MW", formatNumber(pmaxMw, pmaxMw < 10 ? 2 : 1)],
+          ["Source", gen.energy_source ?? "n/a"],
+          ["Capacity tag", gen.capacity_tag ?? "n/a"],
+          ["Connection", gen.connection_method ?? "direct"],
+          ["Provenance", gen.provenance ?? "n/a"],
+          ["Confidence", gen.confidence === null || gen.confidence === undefined ? "n/a" : formatNumber(gen.confidence, 2)],
+          ["Bus", String(gen.gen_bus)],
+        ],
       })
     }
     return points
@@ -1232,6 +1251,8 @@ function App() {
     () => assetsWithLocation.filter((asset) => !isLinearAsset(asset) && !isSupportAsset(asset)),
     [assetsWithLocation],
   )
+  const solverPolicy = String(caseData?._metadata?.solver_include_policy ?? "demo_full_osm")
+  const solverPolicyLabel = solverPolicy === "demo_full_osm" ? "Demo full OSM" : "Strict transmission"
 
   const selectedAsset = useMemo(
     () => assetsWithLocation.find((asset) => assetKey(asset) === selectedAssetId) ?? null,
@@ -1327,6 +1348,9 @@ function App() {
             <Badge className="rounded-[3px] bg-zinc-950 px-2 py-1 text-white">Tiangou GridSFM dashboard</Badge>
             <Badge variant="outline" className="rounded-[3px] border-zinc-300 bg-white/75 px-2 py-1">
               {formatNumber(routeLayers.length)} map lines
+            </Badge>
+            <Badge variant="outline" className="rounded-[3px] border-emerald-700/30 bg-emerald-50/90 px-2 py-1 text-emerald-900">
+              Solver policy: {solverPolicyLabel}
             </Badge>
             {showConsumerProxies && (
               <Badge variant="outline" className="rounded-[3px] border-zinc-300 bg-white/75 px-2 py-1">

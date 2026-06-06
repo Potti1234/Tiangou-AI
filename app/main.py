@@ -30,7 +30,10 @@ from app.repository import (
     upsert_elements,
 )
 from app.topology import (
+    DEFAULT_MIN_SOLVER_GENERATOR_MW,
+    DEFAULT_SOLVER_INCLUDE_POLICY,
     DEMAND_SNAPSHOTS,
+    SOLVER_INCLUDE_POLICIES,
     build_asset_reconciliation,
     build_powermodels_preview,
     build_powermodels_validation,
@@ -42,6 +45,7 @@ from app.topology import (
 
 
 DEMAND_SNAPSHOT_PATTERN = f"^({'|'.join(sorted(DEMAND_SNAPSHOTS))})$"
+SOLVER_INCLUDE_POLICY_PATTERN = f"^({'|'.join(sorted(SOLVER_INCLUDE_POLICIES))})$"
 HANDOFF_ARTIFACT_PATHS = {
     "raw_json": "data/processed/hong_kong_16h_model.json",
     "solvable_json": "data/processed/hong_kong_16h_model.solvable.json",
@@ -58,6 +62,9 @@ class DashboardSnapshotParams:
     include_hk_interties: bool
     hk_intertie_derate: float
     min_voltage_kv: float | None
+    solver_include_policy: str = DEFAULT_SOLVER_INCLUDE_POLICY
+    min_solver_generator_mw: float = DEFAULT_MIN_SOLVER_GENERATOR_MW
+    include_synthetic_generator_connections: bool = True
     asset_limit: int = 5000
 
 
@@ -140,6 +147,9 @@ def _dashboard_cache_key(params: DashboardSnapshotParams, latest_ingest: Any, pr
         params.include_hk_interties,
         params.hk_intertie_derate,
         params.min_voltage_kv,
+        params.solver_include_policy,
+        params.min_solver_generator_mw,
+        params.include_synthetic_generator_connections,
         params.asset_limit,
         ingest_signature,
         proxy_status["count"],
@@ -198,6 +208,9 @@ def _pipeline_summary_payload(
             "include_hk_interties": params.include_hk_interties,
             "hk_intertie_derate": params.hk_intertie_derate,
             "min_voltage_kv": params.min_voltage_kv,
+            "solver_include_policy": params.solver_include_policy,
+            "min_solver_generator_mw": params.min_solver_generator_mw,
+            "include_synthetic_generator_connections": params.include_synthetic_generator_connections,
         },
         "stage_status": stage_status,
         "latest_ingest_run": latest_ingest_payload,
@@ -252,7 +265,12 @@ def _build_dashboard_snapshot(params: DashboardSnapshotParams) -> dict[str, Any]
         min_voltage_kv=params.min_voltage_kv,
         consumer_proxies=consumer_proxies_payload,
     )
-    case = topology_preview_to_powermodels(topology)
+    case = topology_preview_to_powermodels(
+        topology,
+        solver_include_policy=params.solver_include_policy,
+        min_solver_generator_mw=params.min_solver_generator_mw,
+        include_synthetic_generator_connections=params.include_synthetic_generator_connections,
+    )
     validation = validate_powermodels_case(case)
     diagnostics = build_topology_diagnostics(case)
     reconciliation = build_asset_reconciliation(rows, topology, case)
@@ -561,6 +579,9 @@ def topology_preview(
     include_hk_interties: bool = False,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
     min_voltage_kv: float | None = Query(default=None, gt=0.0),
+    solver_include_policy: str = Query(default=DEFAULT_SOLVER_INCLUDE_POLICY, pattern=SOLVER_INCLUDE_POLICY_PATTERN),
+    min_solver_generator_mw: float = Query(default=DEFAULT_MIN_SOLVER_GENERATOR_MW, ge=0.0),
+    include_synthetic_generator_connections: bool = True,
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -575,6 +596,9 @@ def topology_preview(
             include_hk_interties=include_hk_interties,
             hk_intertie_derate=hk_intertie_derate,
             min_voltage_kv=min_voltage_kv,
+            solver_include_policy=solver_include_policy,
+            min_solver_generator_mw=min_solver_generator_mw,
+            include_synthetic_generator_connections=include_synthetic_generator_connections,
         )
     )["topology"]
 
@@ -587,6 +611,9 @@ def powermodels_preview(
     include_hk_interties: bool = False,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
     min_voltage_kv: float | None = Query(default=None, gt=0.0),
+    solver_include_policy: str = Query(default=DEFAULT_SOLVER_INCLUDE_POLICY, pattern=SOLVER_INCLUDE_POLICY_PATTERN),
+    min_solver_generator_mw: float = Query(default=DEFAULT_MIN_SOLVER_GENERATOR_MW, ge=0.0),
+    include_synthetic_generator_connections: bool = True,
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -601,6 +628,9 @@ def powermodels_preview(
             include_hk_interties=include_hk_interties,
             hk_intertie_derate=hk_intertie_derate,
             min_voltage_kv=min_voltage_kv,
+            solver_include_policy=solver_include_policy,
+            min_solver_generator_mw=min_solver_generator_mw,
+            include_synthetic_generator_connections=include_synthetic_generator_connections,
         )
     )["powermodels_case"]
 
@@ -613,6 +643,9 @@ def topology_validation(
     include_hk_interties: bool = False,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
     min_voltage_kv: float | None = Query(default=None, gt=0.0),
+    solver_include_policy: str = Query(default=DEFAULT_SOLVER_INCLUDE_POLICY, pattern=SOLVER_INCLUDE_POLICY_PATTERN),
+    min_solver_generator_mw: float = Query(default=DEFAULT_MIN_SOLVER_GENERATOR_MW, ge=0.0),
+    include_synthetic_generator_connections: bool = True,
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -627,6 +660,9 @@ def topology_validation(
             include_hk_interties=include_hk_interties,
             hk_intertie_derate=hk_intertie_derate,
             min_voltage_kv=min_voltage_kv,
+            solver_include_policy=solver_include_policy,
+            min_solver_generator_mw=min_solver_generator_mw,
+            include_synthetic_generator_connections=include_synthetic_generator_connections,
         )
     )["summary"]["validation"]
 
@@ -639,6 +675,9 @@ def topology_diagnostics(
     include_hk_interties: bool = False,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
     min_voltage_kv: float | None = Query(default=None, gt=0.0),
+    solver_include_policy: str = Query(default=DEFAULT_SOLVER_INCLUDE_POLICY, pattern=SOLVER_INCLUDE_POLICY_PATTERN),
+    min_solver_generator_mw: float = Query(default=DEFAULT_MIN_SOLVER_GENERATOR_MW, ge=0.0),
+    include_synthetic_generator_connections: bool = True,
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -653,6 +692,9 @@ def topology_diagnostics(
             include_hk_interties=include_hk_interties,
             hk_intertie_derate=hk_intertie_derate,
             min_voltage_kv=min_voltage_kv,
+            solver_include_policy=solver_include_policy,
+            min_solver_generator_mw=min_solver_generator_mw,
+            include_synthetic_generator_connections=include_synthetic_generator_connections,
         )
     )["summary"]["diagnostics"]
 
@@ -665,6 +707,9 @@ def topology_asset_reconciliation(
     include_hk_interties: bool = False,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
     min_voltage_kv: float | None = Query(default=None, gt=0.0),
+    solver_include_policy: str = Query(default=DEFAULT_SOLVER_INCLUDE_POLICY, pattern=SOLVER_INCLUDE_POLICY_PATTERN),
+    min_solver_generator_mw: float = Query(default=DEFAULT_MIN_SOLVER_GENERATOR_MW, ge=0.0),
+    include_synthetic_generator_connections: bool = True,
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -679,6 +724,9 @@ def topology_asset_reconciliation(
             include_hk_interties=include_hk_interties,
             hk_intertie_derate=hk_intertie_derate,
             min_voltage_kv=min_voltage_kv,
+            solver_include_policy=solver_include_policy,
+            min_solver_generator_mw=min_solver_generator_mw,
+            include_synthetic_generator_connections=include_synthetic_generator_connections,
         )
     )["asset_reconciliation"]
 
@@ -691,6 +739,9 @@ def dashboard_snapshot(
     include_hk_interties: bool = False,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
     min_voltage_kv: float | None = Query(default=100.0, gt=0.0),
+    solver_include_policy: str = Query(default=DEFAULT_SOLVER_INCLUDE_POLICY, pattern=SOLVER_INCLUDE_POLICY_PATTERN),
+    min_solver_generator_mw: float = Query(default=DEFAULT_MIN_SOLVER_GENERATOR_MW, ge=0.0),
+    include_synthetic_generator_connections: bool = True,
     asset_limit: int = Query(default=5000, ge=1, le=5000),
 ) -> dict[str, Any]:
     try:
@@ -706,6 +757,9 @@ def dashboard_snapshot(
             include_hk_interties=include_hk_interties,
             hk_intertie_derate=hk_intertie_derate,
             min_voltage_kv=min_voltage_kv,
+            solver_include_policy=solver_include_policy,
+            min_solver_generator_mw=min_solver_generator_mw,
+            include_synthetic_generator_connections=include_synthetic_generator_connections,
             asset_limit=asset_limit,
         )
     )
@@ -719,6 +773,9 @@ def topology_pipeline_summary(
     include_hk_interties: bool = False,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
     min_voltage_kv: float | None = Query(default=100.0, gt=0.0),
+    solver_include_policy: str = Query(default=DEFAULT_SOLVER_INCLUDE_POLICY, pattern=SOLVER_INCLUDE_POLICY_PATTERN),
+    min_solver_generator_mw: float = Query(default=DEFAULT_MIN_SOLVER_GENERATOR_MW, ge=0.0),
+    include_synthetic_generator_connections: bool = True,
 ) -> dict[str, Any]:
     try:
         get_region(region_key)
@@ -733,5 +790,8 @@ def topology_pipeline_summary(
             include_hk_interties=include_hk_interties,
             hk_intertie_derate=hk_intertie_derate,
             min_voltage_kv=min_voltage_kv,
+            solver_include_policy=solver_include_policy,
+            min_solver_generator_mw=min_solver_generator_mw,
+            include_synthetic_generator_connections=include_synthetic_generator_connections,
         )
     )["summary"]

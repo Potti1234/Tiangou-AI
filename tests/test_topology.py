@@ -324,7 +324,7 @@ def test_topology_preview_merges_fragmented_same_voltage_circuits() -> None:
     ]
 
     topology = build_topology_preview(rows, snap_tolerance_km=0.2)
-    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2, solver_include_policy="strict_transmission")
 
     assert topology["metadata"]["bus_count"] == 2
     assert topology["metadata"]["branch_count"] == 1
@@ -430,7 +430,7 @@ def test_topology_preview_splits_multi_voltage_facilities_with_transformers() ->
     ]
 
     topology = build_topology_preview(rows, snap_tolerance_km=0.2)
-    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2, solver_include_policy="strict_transmission")
 
     assert topology["metadata"]["bus_count"] == 4
     assert topology["metadata"]["branch_count"] == 3
@@ -451,7 +451,7 @@ def test_topology_preview_splits_multi_voltage_facilities_with_transformers() ->
 
 
 def test_powermodels_preview_exports_solver_handoff_shape() -> None:
-    case = build_powermodels_preview(_sample_rows(), snap_tolerance_km=0.2)
+    case = build_powermodels_preview(_sample_rows(), snap_tolerance_km=0.2, solver_include_policy="strict_transmission")
 
     assert case["baseMVA"] == 100.0
     assert set(case) >= {"bus", "branch", "gen", "load", "shunt"}
@@ -679,7 +679,7 @@ def test_powermodels_preview_infers_missing_bus_voltage_from_incident_branches()
         },
     ]
 
-    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2, solver_include_policy="strict_transmission")
 
     assert case["_metadata"]["voltage_inference"] == {
         "tagged": 0,
@@ -745,7 +745,7 @@ def test_powermodels_preview_uses_endpoint_voltage_for_untagged_branch_parameter
         },
     ]
 
-    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2, solver_include_policy="strict_transmission")
 
     branch = next(iter(case["branch"].values()))
     assert branch["rate_a"] == 1800.0
@@ -793,7 +793,7 @@ def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
     ]
 
     topology = build_topology_preview(rows, snap_tolerance_km=0.2)
-    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2, solver_include_policy="strict_transmission")
 
     tagged_preview = next(generator for generator in topology["generators"] if generator["id"] == "gen:node:50")
     assert tagged_preview["pmax_mw"] == 800.0
@@ -832,7 +832,7 @@ def test_powermodels_preview_prunes_disconnected_no_load_generation_island() -> 
         },
     ]
 
-    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2, solver_include_policy="strict_transmission")
     validation = validate_powermodels_case(case)
 
     assert case["_metadata"]["dropped_no_load_generation_island_count"] == 1
@@ -866,7 +866,7 @@ def test_powermodels_preview_connects_load_islands_with_synthetic_backbone() -> 
     ]
 
     topology = build_topology_preview(rows, snap_tolerance_km=0.2)
-    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2, solver_include_policy="strict_transmission")
     validation = validate_powermodels_case(case)
 
     backbone = [
@@ -914,7 +914,7 @@ def test_powermodels_preview_drops_passive_components_from_solver_case() -> None
     ]
 
     topology = build_topology_preview(rows, snap_tolerance_km=0.2)
-    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2, solver_include_policy="strict_transmission")
 
     assert topology["metadata"]["bus_count"] == 5
     assert case["_metadata"]["bus_count"] == 3
@@ -936,6 +936,7 @@ def test_powermodels_preview_can_include_hk_intertie() -> None:
         _sample_rows(),
         snap_tolerance_km=0.2,
         include_hk_interties=True,
+        solver_include_policy="strict_transmission",
     )
     validation = validate_powermodels_case(case)
 
@@ -963,6 +964,7 @@ def test_topology_diagnostics_reports_synthetic_branches_and_voltage_mismatches(
         _sample_rows(),
         snap_tolerance_km=0.2,
         include_hk_interties=True,
+        solver_include_policy="strict_transmission",
     )
     validation = validate_powermodels_case(case)
 
@@ -998,7 +1000,7 @@ def test_topology_diagnostics_reports_synthetic_branches_and_voltage_mismatches(
 def test_asset_reconciliation_reports_raw_preview_and_solver_counts() -> None:
     rows = [*_sample_rows(), *_sample_lamma_generation_rows()]
     topology = build_topology_preview(rows, snap_tolerance_km=0.2)
-    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2, solver_include_policy="strict_transmission")
 
     reconciliation = build_asset_reconciliation(rows, topology, case)
 
@@ -1021,12 +1023,7 @@ def test_asset_reconciliation_includes_lamma_generation_assets() -> None:
     lamma_power = by_name["Lamma Power Station"]
     assert lamma_power["parsed_pmax_mw"] == 3736.0
     assert lamma_power["appears_in_topology_generators"] is True
-    assert lamma_power["status"] in {
-        "retained_solver_generator",
-        "aggregated_into_equivalent_capacity",
-        "not_solver_connected",
-        "preview_generation_candidate",
-    }
+    assert lamma_power["status"] == "retained_solver_generator"
     assert lamma_power["reason"]
 
     lamma_winds_plant = by_name["Lamma Winds Plant"]
@@ -1037,13 +1034,61 @@ def test_asset_reconciliation_includes_lamma_generation_assets() -> None:
     lamma_winds_generator = by_name["Lamma Winds Generator"]
     assert lamma_winds_generator["parsed_pmax_mw"] == 0.8
     assert lamma_winds_generator["output_tag"] == "generator:output:electricity"
+    assert lamma_winds_generator["status"] == "retained_solver_generator"
     assert lamma_winds_generator["reason"]
+
+
+def test_demo_full_osm_promotes_lamma_generators_with_synthetic_connections() -> None:
+    rows = [*_sample_rows(), *_sample_lamma_generation_rows()]
+
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    validation = validate_powermodels_case(case)
+
+    assert case["_metadata"]["solver_include_policy"] == "demo_full_osm"
+    assert case["_metadata"]["gen_count"] == 5
+    assert case["_metadata"]["tagged_gen_count"] == 3
+    assert case["_metadata"]["synthetic_generator_connection_branch_count"] == 3
+    assert validation["errors"] == []
+
+    lamma_power = next(generator for generator in case["gen"].values() if generator["source_id"] == "gen:way:246974322")
+    assert lamma_power["pmax"] == 37.36
+    assert lamma_power["capacity_tag"] == "plant:output:electricity"
+    assert lamma_power["connection_method"] == "synthetic_connection_to_nearest_substation"
+    assert lamma_power["provenance"] == "inferred_generator_connection"
+    assert lamma_power["gen_bus"] in {bus["bus_i"] for bus in case["bus"].values()}
+
+    lamma_winds = [
+        generator
+        for generator in case["gen"].values()
+        if generator["source_id"] in {"gen:way:323123016", "gen:way:323123015"}
+    ]
+    assert len(lamma_winds) == 2
+    assert {generator["pmax"] for generator in lamma_winds} == {0.008}
+    assert {generator["energy_source"] for generator in lamma_winds} == {"wind"}
+
+
+def test_demo_full_osm_retains_more_branches_than_strict_policy() -> None:
+    rows = [*_sample_rows(), *_sample_lamma_generation_rows()]
+
+    strict_case = build_powermodels_preview(rows, snap_tolerance_km=0.2, solver_include_policy="strict_transmission")
+    demo_case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+
+    assert demo_case["_metadata"]["solver_include_policy"] == "demo_full_osm"
+    assert len(demo_case["branch"]) > len(strict_case["branch"])
+    retained_cable = next(branch for branch in demo_case["branch"].values() if branch["source_id"] == "osm:way:11")
+    assert retained_cable["retention_policy"] == "demo_full_osm"
+    assert retained_cable["solver_retention_reason"] == "demo_retained_isolated"
+    assert any(
+        branch["provenance"] == "synthetic_connection_to_nearest_substation"
+        and branch["retention_policy"] == "demo_full_osm"
+        for branch in demo_case["branch"].values()
+    )
 
 
 def test_asset_reconciliation_classifies_raw_lines_and_cables() -> None:
     rows = _sample_rows()
     topology = build_topology_preview(rows, snap_tolerance_km=0.2)
-    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2, solver_include_policy="strict_transmission")
 
     linear_assets = build_asset_reconciliation(rows, topology, case)["linear_assets"]
 
@@ -1094,7 +1139,7 @@ def test_topology_preview_rejects_unknown_demand_snapshot() -> None:
 
 
 def test_powermodels_validation_reports_islands_and_capacity() -> None:
-    case = build_powermodels_preview(_sample_rows(), snap_tolerance_km=0.2)
+    case = build_powermodels_preview(_sample_rows(), snap_tolerance_km=0.2, solver_include_policy="strict_transmission")
 
     validation = validate_powermodels_case(case)
 

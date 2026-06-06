@@ -53,6 +53,9 @@ DEMAND_SNAPSHOTS = {
     },
 }
 BASE_MVA = 100.0
+SOLVER_INCLUDE_POLICIES = {"strict_transmission", "demo_full_osm"}
+DEFAULT_SOLVER_INCLUDE_POLICY = "demo_full_osm"
+DEFAULT_MIN_SOLVER_GENERATOR_MW = 0.5
 LOAD_DEFAULTS = {
     "power_factor": 0.95,
 }
@@ -823,6 +826,9 @@ def build_powermodels_preview(
     hk_intertie_derate: float = 1.0,
     min_voltage_kv: float | None = None,
     consumer_proxies: Iterable[Mapping[str, Any]] | None = None,
+    solver_include_policy: str = DEFAULT_SOLVER_INCLUDE_POLICY,
+    min_solver_generator_mw: float = DEFAULT_MIN_SOLVER_GENERATOR_MW,
+    include_synthetic_generator_connections: bool = True,
 ) -> dict[str, Any]:
     topology = build_topology_preview(
         rows,
@@ -833,7 +839,12 @@ def build_powermodels_preview(
         min_voltage_kv=min_voltage_kv,
         consumer_proxies=consumer_proxies,
     )
-    return topology_preview_to_powermodels(topology)
+    return topology_preview_to_powermodels(
+        topology,
+        solver_include_policy=solver_include_policy,
+        min_solver_generator_mw=min_solver_generator_mw,
+        include_synthetic_generator_connections=include_synthetic_generator_connections,
+    )
 
 
 def build_powermodels_validation(
@@ -845,6 +856,9 @@ def build_powermodels_validation(
     hk_intertie_derate: float = 1.0,
     min_voltage_kv: float | None = None,
     consumer_proxies: Iterable[Mapping[str, Any]] | None = None,
+    solver_include_policy: str = DEFAULT_SOLVER_INCLUDE_POLICY,
+    min_solver_generator_mw: float = DEFAULT_MIN_SOLVER_GENERATOR_MW,
+    include_synthetic_generator_connections: bool = True,
 ) -> dict[str, Any]:
     case = build_powermodels_preview(
         rows,
@@ -854,24 +868,34 @@ def build_powermodels_validation(
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
         consumer_proxies=consumer_proxies,
+        solver_include_policy=solver_include_policy,
+        min_solver_generator_mw=min_solver_generator_mw,
+        include_synthetic_generator_connections=include_synthetic_generator_connections,
     )
     return validate_powermodels_case(case)
 
 
-def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, Any]:
+def topology_preview_to_powermodels(
+    topology: Mapping[str, Any],
+    *,
+    solver_include_policy: str = DEFAULT_SOLVER_INCLUDE_POLICY,
+    min_solver_generator_mw: float = DEFAULT_MIN_SOLVER_GENERATOR_MW,
+    include_synthetic_generator_connections: bool = True,
+) -> dict[str, Any]:
+    _validate_solver_include_policy(solver_include_policy)
+    _validate_min_solver_generator_mw(min_solver_generator_mw)
     raw_buses = list(topology["buses"])
     raw_branch_candidates = [
         branch
         for branch in topology["branches"]
         if branch.get("from_bus_id") and branch.get("to_bus_id") and branch.get("from_bus_id") != branch.get("to_bus_id")
     ]
-    raw_branches = [
-        branch
-        for branch in raw_branch_candidates
-        if branch.get("circuit_class") == "inter_facility"
-    ]
+    raw_branches = _solver_branch_candidates(raw_branch_candidates, solver_include_policy=solver_include_policy)
     raw_loads = list(topology["loads"])
-    tagged_generators = _tagged_generators(topology.get("generators", []))
+    tagged_generators = _tagged_generators(
+        topology.get("generators", []),
+        min_solver_generator_mw=min_solver_generator_mw,
+    )
     active_selection = _active_preview_bus_selection(raw_buses, raw_branches, raw_loads, tagged_generators)
     active_bus_ids = active_selection["active_bus_ids"]
     buses = [bus for bus in raw_buses if bus["id"] in active_bus_ids]
@@ -881,7 +905,18 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
         if branch["from_bus_id"] in active_bus_ids and branch["to_bus_id"] in active_bus_ids
     ]
     loads = [load for load in raw_loads if load["bus_id"] in active_bus_ids]
-    tagged_generators = [generator for generator in tagged_generators if generator["bus_id"] in active_bus_ids]
+    generator_promotion = _promote_generators_to_active_buses(
+        generators=tagged_generators,
+        raw_buses=raw_buses,
+        buses=buses,
+        branches=branches,
+        active_bus_ids=active_bus_ids,
+        include_synthetic_generator_connections=include_synthetic_generator_connections
+        and solver_include_policy == "demo_full_osm",
+    )
+    buses = generator_promotion["buses"]
+    branches = generator_promotion["branches"]
+    tagged_generators = generator_promotion["generators"]
     voltage_inference = _infer_missing_bus_voltages(buses, branches)
     equivalent_generators = _equivalent_generators(buses, branches, loads)
     all_generators = [*tagged_generators, *equivalent_generators]
@@ -890,6 +925,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
     gen_bus_ids = {generator["bus_id"] for generator in all_generators}
     load_bus_ids = {load["bus_id"] for load in loads}
     reference_bus_ids = _reference_bus_ids_by_island(buses, branches, gen_bus_ids)
+    dropped_passive_branch_count = max(0, len(raw_branches) - len(branches))
 
     bus_dict = {}
     for bus in buses:
@@ -980,6 +1016,10 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "energy_source": generator.get("energy_source"),
             "resource_type": generator.get("resource_type"),
             "cost_class": generator.get("cost_class"),
+            "capacity_tag": generator.get("capacity_tag"),
+            "connection_method": generator.get("connection_method"),
+            "assigned_bus_id": generator.get("assigned_bus_id"),
+            "original_bus_id": generator.get("original_bus_id"),
         }
 
     component_metadata = _solver_component_metadata(bus_dict, branch_dict, load_dict, gen_dict)
@@ -992,6 +1032,9 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
         "include_hk_interties": topology["metadata"]["include_hk_interties"],
         "hk_intertie_derate": topology["metadata"]["hk_intertie_derate"],
         "min_voltage_kv": topology["metadata"]["min_voltage_kv"],
+        "solver_include_policy": solver_include_policy,
+        "min_solver_generator_mw": min_solver_generator_mw,
+        "include_synthetic_generator_connections": include_synthetic_generator_connections,
         "baseMVA": BASE_MVA,
         "per_unit": True,
         "bus": bus_dict,
@@ -1015,6 +1058,9 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "include_hk_interties": topology["metadata"]["include_hk_interties"],
             "hk_intertie_derate": topology["metadata"]["hk_intertie_derate"],
             "min_voltage_kv": topology["metadata"]["min_voltage_kv"],
+            "solver_include_policy": solver_include_policy,
+            "min_solver_generator_mw": min_solver_generator_mw,
+            "include_synthetic_generator_connections": include_synthetic_generator_connections,
             "bus_count": len(bus_dict),
             "branch_count": len(branch_dict),
             "load_count": len(load_dict),
@@ -1025,7 +1071,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "retained_bus_count": len(buses),
             "retained_branch_count": len(branches),
             "dropped_passive_bus_count": len(raw_buses) - len(buses),
-            "dropped_passive_branch_count": len(raw_branches) - len(branches),
+            "dropped_passive_branch_count": dropped_passive_branch_count,
             "dropped_non_interfacility_branch_count": len(raw_branch_candidates) - len(raw_branches),
             "dropped_no_load_generation_island_count": active_selection["dropped_no_load_generation_island_count"],
             "dropped_no_load_generation_bus_count": active_selection["dropped_no_load_generation_bus_count"],
@@ -1045,7 +1091,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
                 "retained_bus_count": len(buses),
                 "retained_branch_count": len(branches),
                 "dropped_passive_bus_count": len(raw_buses) - len(buses),
-                "dropped_passive_branch_count": len(raw_branches) - len(branches),
+                "dropped_passive_branch_count": dropped_passive_branch_count,
                 "dropped_non_interfacility_branch_count": len(raw_branch_candidates) - len(raw_branches),
                 "dropped_no_load_generation_island_count": active_selection["dropped_no_load_generation_island_count"],
                 "dropped_no_load_generation_bus_count": active_selection["dropped_no_load_generation_bus_count"],
@@ -1061,6 +1107,11 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             },
             "tagged_gen_count": len(tagged_generators),
             "equivalent_gen_count": len(equivalent_generators),
+            "synthetic_generator_connection_branch_count": sum(
+                1
+                for branch in branches
+                if branch.get("provenance") == "synthetic_connection_to_nearest_substation"
+            ),
             "synthetic_branch_count": sum(1 for branch in branches if _is_synthetic_branch(branch)),
             "inferred_transformer_branch_count": sum(1 for branch in branch_dict.values() if branch.get("transformer")),
             "solver_circuit_class_counts": _count_by(branch_dict.values(), "circuit_class"),
@@ -1153,6 +1204,164 @@ def _active_preview_bus_selection(
         "dropped_no_load_generation_island_count": dropped_generation_islands,
         "dropped_no_load_generation_bus_count": dropped_generation_bus_count,
         "dropped_no_load_generation_pmax_mw": round(dropped_generation_pmax_mw, 3),
+    }
+
+
+def _solver_branch_candidates(
+    branches: list[Mapping[str, Any]],
+    *,
+    solver_include_policy: str,
+) -> list[dict[str, Any]]:
+    if solver_include_policy == "strict_transmission":
+        return [
+            dict(branch)
+            for branch in branches
+            if branch.get("circuit_class") == "inter_facility"
+        ]
+
+    retained = []
+    for branch in branches:
+        circuit_class = str(branch.get("circuit_class") or "unknown")
+        if circuit_class == "self_loop":
+            continue
+        retained_branch = dict(branch)
+        if circuit_class == "inter_facility":
+            retained_branch.setdefault("solver_retention_reason", "inter_facility")
+        elif circuit_class in {"tap", "isolated"}:
+            retained_branch["retention_policy"] = "demo_full_osm"
+            retained_branch["solver_retention_reason"] = f"demo_retained_{circuit_class}"
+            retained_branch["confidence"] = min(float(retained_branch.get("confidence") or 0.0), 0.45)
+        else:
+            retained_branch["retention_policy"] = "demo_full_osm"
+            retained_branch["solver_retention_reason"] = f"demo_retained_{circuit_class}"
+        retained.append(retained_branch)
+    return retained
+
+
+def _promote_generators_to_active_buses(
+    *,
+    generators: list[dict[str, Any]],
+    raw_buses: list[dict[str, Any]],
+    buses: list[dict[str, Any]],
+    branches: list[dict[str, Any]],
+    active_bus_ids: set[str],
+    include_synthetic_generator_connections: bool,
+) -> dict[str, Any]:
+    raw_by_id = {bus["id"]: bus for bus in raw_buses}
+    promoted_generators = []
+    promoted_branches = list(branches)
+    promoted_buses = list(buses)
+    promoted_bus_ids = {bus["id"] for bus in promoted_buses}
+
+    for generator in generators:
+        if generator["bus_id"] in active_bus_ids:
+            promoted = dict(generator)
+            promoted["connection_method"] = "existing_solver_bus"
+            promoted_generators.append(promoted)
+            continue
+
+        if not include_synthetic_generator_connections:
+            continue
+        source_bus = raw_by_id.get(generator["bus_id"])
+        assigned_bus = _nearest_generator_connection_bus(source_bus, promoted_buses)
+        if source_bus is None or assigned_bus is None:
+            continue
+        if source_bus["id"] not in promoted_bus_ids:
+            site_bus = dict(source_bus)
+            site_bus["provenance"] = "inferred_generator_connection"
+            site_bus["confidence"] = min(float(site_bus.get("confidence") or 0.0), 0.55)
+            promoted_buses.append(site_bus)
+            promoted_bus_ids.add(site_bus["id"])
+
+        promoted = dict(generator)
+        promoted["connection_method"] = "synthetic_connection_to_nearest_substation"
+        promoted["assigned_bus_id"] = assigned_bus["id"]
+        promoted["original_bus_id"] = generator["bus_id"]
+        promoted["provenance"] = "inferred_generator_connection"
+        promoted["confidence"] = min(float(generator.get("confidence") or 0.0), 0.55)
+        promoted_generators.append(promoted)
+
+        connection_branch = _synthetic_generator_connection_branch(
+            generator=promoted,
+            source_bus=source_bus,
+            assigned_bus=assigned_bus,
+        )
+        promoted_branches.append(connection_branch)
+
+    return {
+        "buses": promoted_buses,
+        "branches": promoted_branches,
+        "generators": promoted_generators,
+    }
+
+
+def _nearest_generator_connection_bus(
+    source_bus: Mapping[str, Any] | None,
+    buses: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if source_bus is None or source_bus.get("lat") is None or source_bus.get("lon") is None:
+        return None
+    point = (float(source_bus["lat"]), float(source_bus["lon"]))
+    preferred_territory = source_bus.get("service_territory")
+    candidates = [
+        bus
+        for bus in buses
+        if bus.get("lat") is not None
+        and bus.get("lon") is not None
+        and bus.get("power") in {"substation", "sub_station", "transformer", "plant", "generator", "busbar", "switchgear"}
+        and (preferred_territory is None or bus.get("service_territory") in {None, preferred_territory})
+        and bus.get("voltage_band") in {"extra_high_voltage", "high_voltage", "subtransmission", "unknown"}
+    ]
+    if not candidates:
+        candidates = [bus for bus in buses if bus.get("lat") is not None and bus.get("lon") is not None]
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda bus: (
+            _haversine_km(point, (float(bus["lat"]), float(bus["lon"]))),
+            0 if bus.get("service_territory") == preferred_territory else 1,
+            -(float(bus.get("base_kv") or 0.0)),
+        ),
+    )
+
+
+def _synthetic_generator_connection_branch(
+    *,
+    generator: Mapping[str, Any],
+    source_bus: Mapping[str, Any],
+    assigned_bus: Mapping[str, Any],
+) -> dict[str, Any]:
+    from_point = (float(source_bus["lat"]), float(source_bus["lon"]))
+    to_point = (float(assigned_bus["lat"]), float(assigned_bus["lon"]))
+    length_km = max(_haversine_km(from_point, to_point), 0.1)
+    voltage_kv = assigned_bus.get("base_kv") or source_bus.get("base_kv") or 132.0
+    defaults = _branch_defaults("cable", float(voltage_kv))
+    defaults["rate_mva"] = max(float(defaults.get("rate_mva") or 0.0), float(generator["pmax_mw"]) * 1.2)
+    defaults["parameter_source"] = "synthetic_connection_to_nearest_substation"
+    return {
+        "id": f"synthetic:generator-connection:{generator['id']}",
+        "source": {"generator_id": generator["id"], "source_bus_id": source_bus["id"], "assigned_bus_id": assigned_bus["id"]},
+        "name": f"{generator['id']} synthetic generator connection",
+        "power": "synthetic_generator_connection",
+        "from_bus_id": source_bus["id"],
+        "to_bus_id": assigned_bus["id"],
+        "voltage_kv": float(voltage_kv),
+        "voltage_band": voltage_band(float(voltage_kv)),
+        "length_km": round(length_km, 6),
+        "location": "synthetic",
+        "circuits": None,
+        "cables": None,
+        "circuit_candidates": [{"voltage_kv": float(voltage_kv), "circuit_count": 1, "count_source": "synthetic_generator_connection"}],
+        "circuit_count": 1,
+        "circuit_count_source": "synthetic_generator_connection",
+        "circuit_class": "tap",
+        "parameter_defaults": defaults,
+        "endpoint_quality": [{"snap": "generator_site"}, {"snap": "assigned_solver_bus"}],
+        "provenance": "synthetic_connection_to_nearest_substation",
+        "retention_policy": "demo_full_osm",
+        "solver_retention_reason": "promoted_osm_generator_connection",
+        "confidence": 0.45,
     }
 
 
@@ -2260,6 +2469,8 @@ def _powermodels_branch(
         "circuit_count": branch.get("circuit_count"),
         "merged_segment_count": branch.get("merged_segment_count"),
         "provenance": branch.get("provenance"),
+        "retention_policy": branch.get("retention_policy"),
+        "solver_retention_reason": branch.get("solver_retention_reason"),
         "confidence": branch.get("confidence"),
         "parameter_source": parameter_source,
         "parameter_table": transformer_parameter_table if transformer else defaults.get("parameter_table"),
@@ -2370,6 +2581,17 @@ def _validate_derate(derate: float) -> None:
 def _validate_min_voltage(min_voltage_kv: float | None) -> None:
     if min_voltage_kv is not None and min_voltage_kv <= 0:
         raise ValueError("Minimum voltage must be greater than 0 kV.")
+
+
+def _validate_solver_include_policy(solver_include_policy: str) -> None:
+    if solver_include_policy not in SOLVER_INCLUDE_POLICIES:
+        known = ", ".join(sorted(SOLVER_INCLUDE_POLICIES))
+        raise ValueError(f"Unknown solver include policy '{solver_include_policy}'. Known policies: {known}")
+
+
+def _validate_min_solver_generator_mw(min_solver_generator_mw: float) -> None:
+    if min_solver_generator_mw < 0:
+        raise ValueError("Minimum solver generator MW must be nonnegative.")
 
 
 def _below_min_voltage(voltage_kv: float | None, min_voltage_kv: float | None) -> bool:
@@ -2605,11 +2827,17 @@ def _best_intertie_bus(
     return max(candidates, key=lambda bus: bus.get("base_kv") or 0.0)
 
 
-def _tagged_generators(generators: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _tagged_generators(
+    generators: Iterable[Mapping[str, Any]],
+    *,
+    min_solver_generator_mw: float,
+) -> list[dict[str, Any]]:
     tagged = []
     for generator in generators:
         pmax_mw = generator.get("pmax_mw")
         if pmax_mw is None:
+            continue
+        if float(pmax_mw) < min_solver_generator_mw:
             continue
         fuel_defaults = GENERATOR_FUEL_DEFAULTS[_normal_generator_source(generator.get("source"))]
         tagged.append(
@@ -2626,6 +2854,8 @@ def _tagged_generators(generators: Iterable[Mapping[str, Any]]) -> list[dict[str
                 "power_factor": fuel_defaults["power_factor"],
                 "provenance": generator.get("provenance"),
                 "confidence": generator.get("confidence"),
+                "capacity_tag": generator.get("capacity_tag"),
+                "connection_method": "preview_bus",
             }
         )
     return tagged
