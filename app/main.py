@@ -29,6 +29,7 @@ from app.repository import (
     upsert_consumer_proxy_elements,
     upsert_elements,
 )
+from app.studies.baseline import build_baseline_weak_spots
 from app.topology import (
     DEFAULT_MIN_SOLVER_GENERATOR_MW,
     DEFAULT_SOLVER_INCLUDE_POLICY,
@@ -165,6 +166,7 @@ def _pipeline_summary_payload(
     case: dict[str, Any],
     validation: dict[str, Any],
     diagnostics: dict[str, Any],
+    baseline_weak_spots: dict[str, Any],
     reconciliation: dict[str, Any],
     latest_ingest_payload: dict[str, Any] | None,
     consumer_proxy_count: int,
@@ -227,6 +229,11 @@ def _pipeline_summary_payload(
             "voltage_mismatches": validation["voltage_mismatches"],
         },
         "diagnostics": diagnostics,
+        "baseline_weak_spots": {
+            "schema": baseline_weak_spots["schema"],
+            "study_type": baseline_weak_spots["study_type"],
+            "system_summary": baseline_weak_spots["system_summary"],
+        },
         "asset_reconciliation": {
             "summary": reconciliation["summary"],
             "top_generation_assets": reconciliation["generation_assets"][:10],
@@ -273,6 +280,7 @@ def _build_dashboard_snapshot(params: DashboardSnapshotParams) -> dict[str, Any]
     )
     validation = validate_powermodels_case(case)
     diagnostics = build_topology_diagnostics(case)
+    baseline_weak_spots = build_baseline_weak_spots(case, validation)
     reconciliation = build_asset_reconciliation(rows, topology, case)
     handoff_artifacts = _handoff_artifact_summary()
     latest_ingest_payload = _latest_ingest_payload(latest_ingest)
@@ -283,6 +291,7 @@ def _build_dashboard_snapshot(params: DashboardSnapshotParams) -> dict[str, Any]
         case=case,
         validation=validation,
         diagnostics=diagnostics,
+        baseline_weak_spots=baseline_weak_spots,
         reconciliation=reconciliation,
         latest_ingest_payload=latest_ingest_payload,
         consumer_proxy_count=proxy_status["count"],
@@ -295,6 +304,7 @@ def _build_dashboard_snapshot(params: DashboardSnapshotParams) -> dict[str, Any]
         "powermodels_case": case,
         "validation": validation,
         "diagnostics": diagnostics,
+        "baseline_weak_spots": baseline_weak_spots,
         "asset_reconciliation": reconciliation,
         "summary": summary,
     }
@@ -729,6 +739,38 @@ def topology_asset_reconciliation(
             include_synthetic_generator_connections=include_synthetic_generator_connections,
         )
     )["asset_reconciliation"]
+
+
+@app.get("/studies/baseline-weak-spots")
+def baseline_weak_spots(
+    region_key: str = "hong-kong",
+    snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
+    demand_snapshot: str = Query(default="peak_16h", pattern=DEMAND_SNAPSHOT_PATTERN),
+    include_hk_interties: bool = False,
+    hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
+    min_voltage_kv: float | None = Query(default=100.0, gt=0.0),
+    solver_include_policy: str = Query(default=DEFAULT_SOLVER_INCLUDE_POLICY, pattern=SOLVER_INCLUDE_POLICY_PATTERN),
+    min_solver_generator_mw: float = Query(default=DEFAULT_MIN_SOLVER_GENERATOR_MW, ge=0.0),
+    include_synthetic_generator_connections: bool = True,
+) -> dict[str, Any]:
+    try:
+        get_region(region_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return _build_dashboard_snapshot(
+        DashboardSnapshotParams(
+            region_key=region_key,
+            snap_tolerance_km=snap_tolerance_km,
+            demand_snapshot=demand_snapshot,
+            include_hk_interties=include_hk_interties,
+            hk_intertie_derate=hk_intertie_derate,
+            min_voltage_kv=min_voltage_kv,
+            solver_include_policy=solver_include_policy,
+            min_solver_generator_mw=min_solver_generator_mw,
+            include_synthetic_generator_connections=include_synthetic_generator_connections,
+        )
+    )["baseline_weak_spots"]
 
 
 @app.get("/grid/dashboard-snapshot")

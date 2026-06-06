@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from app import main
@@ -138,6 +140,10 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
             "/grid/topology/pipeline-summary",
             params={"include_hk_interties": True, "min_voltage_kv": 100.0},
         )
+        baseline_response = client.get(
+            "/studies/baseline-weak-spots",
+            params={"include_hk_interties": True, "min_voltage_kv": 100.0},
+        )
 
     assert ingest_response.status_code == 200
     assert dashboard_response.status_code == 200
@@ -155,6 +161,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert reconciliation_response.status_code == 200
     assert calibration_response.status_code == 200
     assert summary_response.status_code == 200
+    assert baseline_response.status_code == 200
     payload = preview_response.json()
     assert payload["baseMVA"] == 100.0
     assert demo_policy_response.json()["_metadata"]["solver_include_policy"] == "demo_full_osm"
@@ -211,6 +218,25 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert summary_payload["solver_metadata"]["branch_count"] == 1
     assert summary_payload["asset_reconciliation"]["summary"]["raw_linear_count"] == 1
     assert summary_payload["validation"]["metrics"]["island_count"] == 1
+    assert set(summary_payload["baseline_weak_spots"]["system_summary"]) >= {
+        "total_demand_mw",
+        "total_pmax_mw",
+        "reserve_margin_estimate",
+        "synthetic_branch_share",
+        "inferred_voltage_count",
+        "promoted_generator_count",
+        "top_10_risky_branches",
+        "top_10_risky_buses",
+        "warnings",
+    }
+    baseline_payload = baseline_response.json()
+    assert baseline_payload["schema"] == "tiangou.study.baseline_weak_spots.v1"
+    assert baseline_payload["study_type"] == "heuristic_research_demo"
+    assert isinstance(baseline_payload["system_summary"]["promoted_generator_count"], int)
+    assert baseline_payload["system_summary"]["top_10_risky_branches"][0]["risk_score"] >= 0
+    assert baseline_payload["system_summary"]["top_10_risky_branches"][0]["reasons"]
+    assert baseline_payload["system_summary"]["top_10_risky_buses"][0]["risk_score"] >= 0
+    assert baseline_payload["system_summary"]["top_10_risky_buses"][0]["reasons"]
     assert summary_payload["handoff_artifacts"]["pyg_json"].endswith(".pyg.json")
     assert set(summary_payload["handoff_artifact_exists"]) == {"raw_json", "solvable_json", "pyg_json", "scenarios"}
 
@@ -426,3 +452,12 @@ def test_pipeline_summary_reports_running_ingest_stage(tmp_path, monkeypatch) ->
     assert payload["stage_status"]["reconstructed_circuits"] == "running"
     assert payload["stage_status"]["solver_topology"] == "running"
     assert payload["stage_status"]["validation"] == "running"
+
+
+def test_frontend_baseline_panel_does_not_add_hosting_capacity_ui() -> None:
+    source = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+
+    assert "Baseline weak spots" in source
+    assert "Top weak branches" in source
+    assert "Top weak buses" in source
+    assert "hosting capacity" not in source.lower()

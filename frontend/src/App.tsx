@@ -219,6 +219,32 @@ type AssetReconciliation = {
   top_dropped_or_aggregated_assets: ReconciliationAsset[]
 }
 
+type BaselineRiskItem = {
+  branch_id?: string
+  bus_id?: string
+  source_id?: string | null
+  risk_score: number
+  reasons: string[]
+}
+
+type BaselineWeakSpots = {
+  schema: string
+  study_type: string
+  system_summary: {
+    total_demand_mw: number
+    total_pmax_mw: number
+    reserve_margin_estimate: number | null
+    synthetic_branch_share: number
+    synthetic_branch_count: number
+    inferred_voltage_count: number
+    promoted_generator_count: number
+    warning_count: number
+    top_10_risky_branches: BaselineRiskItem[]
+    top_10_risky_buses: BaselineRiskItem[]
+    warnings: string[]
+  }
+}
+
 type PipelineSummary = {
   stage_status: Record<string, StageStatus>
   raw_osm_counts_by_power: Record<string, number>
@@ -227,6 +253,7 @@ type PipelineSummary = {
   solver_metadata: Record<string, unknown>
   validation: ValidationPayload
   diagnostics?: TopologyDiagnostics
+  baseline_weak_spots?: BaselineWeakSpots
   asset_reconciliation?: AssetReconciliation
   handoff_artifacts: Record<string, string>
 }
@@ -567,6 +594,35 @@ function DiagnosticIssueList({ title, items }: { title: string; items: TopologyD
   )
 }
 
+function BaselineRiskList({ title, items }: { title: string; items: BaselineRiskItem[] }) {
+  if (!items.length) {
+    return (
+      <div>
+        <p className="mb-1 text-[11px] font-medium text-zinc-500">{title}</p>
+        <p className="rounded-[4px] border border-zinc-200 bg-white/70 px-2 py-1.5 text-xs text-zinc-500">No weak spots reported.</p>
+      </div>
+    )
+  }
+  return (
+    <div>
+      <p className="mb-1 text-[11px] font-medium text-zinc-500">{title}</p>
+      <div className="space-y-1.5">
+        {items.slice(0, 5).map((item) => (
+          <div key={`${item.branch_id ?? item.bus_id}-${item.source_id ?? "source"}`} className="rounded-[4px] border border-zinc-200 bg-white/75 p-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="min-w-0 truncate font-mono text-[11px] font-semibold text-zinc-950">{item.source_id ?? item.branch_id ?? item.bus_id}</p>
+              <Badge variant="outline" className="shrink-0 rounded-[3px] border-amber-300 bg-amber-50 text-[10px] text-amber-900">
+                {formatNumber(item.risk_score, 0)}
+              </Badge>
+            </div>
+            <p className="mt-1 truncate text-xs text-zinc-600">{item.reasons.slice(0, 2).join(", ")}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function RawMarker({ asset, selected }: { asset: GridAsset; selected: boolean }) {
   const style = styleFor(asset.power)
   const Icon = style.icon
@@ -696,6 +752,8 @@ function DiagnosticsPanel({
   const topologyDiagnostics = summary?.diagnostics
   const diagnosticSummary = topologyDiagnostics?.summary ?? {}
   const severeVoltageMismatches = (topologyDiagnostics?.voltage_mismatches ?? []).filter((item) => item.severe)
+  const baseline = summary?.baseline_weak_spots
+  const baselineSystem = baseline?.system_summary
   const reconciliation = summary?.asset_reconciliation
   const reconciliationSummary = reconciliation?.summary
   const linearStatusCounts = statusCounts(reconciliationSummary, "linear_status_counts")
@@ -756,6 +814,32 @@ function DiagnosticsPanel({
             <MetadataRow label="Severe mismatches" value={metric(summary, "severe_branch_voltage_mismatch_count")} />
             <MetadataRow label="Dropped passive buses" value={summary?.solver_metadata.dropped_passive_bus_count} />
             <MetadataRow label="Dropped non-OPF branches" value={summary?.solver_metadata.dropped_non_interfacility_branch_count} />
+          </div>
+        </section>
+
+        <section className="mt-4">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Baseline weak spots</h2>
+          <div className="mt-2 rounded-[4px] border border-zinc-200 bg-white/70 px-2">
+            <MetadataRow
+              label="Reserve margin"
+              value={typeof baselineSystem?.reserve_margin_estimate === "number" ? `${formatNumber(baselineSystem.reserve_margin_estimate * 100, 1)}%` : "n/a"}
+            />
+            <MetadataRow
+              label="Synthetic dependency"
+              value={typeof baselineSystem?.synthetic_branch_share === "number" ? `${formatNumber(baselineSystem.synthetic_branch_share * 100, 1)}%` : "n/a"}
+            />
+            <MetadataRow label="Promoted generators" value={baselineSystem?.promoted_generator_count} />
+            <MetadataRow label="Inferred voltages" value={baselineSystem?.inferred_voltage_count} />
+            <MetadataRow label="Study warnings" value={baselineSystem?.warning_count} />
+          </div>
+          <div className="mt-2 space-y-2">
+            <BaselineRiskList title="Top weak branches" items={baselineSystem?.top_10_risky_branches ?? []} />
+            <BaselineRiskList title="Top weak buses" items={baselineSystem?.top_10_risky_buses ?? []} />
+            {(baselineSystem?.warnings.length ?? 0) > 0 && (
+              <div className="rounded-[4px] border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs leading-5 text-amber-900">
+                {baselineSystem?.warnings[0]}
+              </div>
+            )}
           </div>
         </section>
 
