@@ -1125,6 +1125,71 @@ def test_demo_full_osm_retains_more_branches_than_strict_policy() -> None:
     )
 
 
+def test_demo_full_osm_retains_passive_usable_branch_component() -> None:
+    rows = [
+        *_sample_rows(),
+        {
+            "osm_type": "node",
+            "osm_id": 90,
+            "power": "terminal",
+            "name": "Passive Terminal A",
+            "voltage": "132000",
+            "operator": None,
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.60,
+            "lon": 114.30,
+            "tags_json": '{"voltage": "132000"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "node",
+            "osm_id": 91,
+            "power": "terminal",
+            "name": "Passive Terminal B",
+            "voltage": "132000",
+            "operator": None,
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.61,
+            "lon": 114.31,
+            "tags_json": '{"voltage": "132000"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "way",
+            "osm_id": 92,
+            "power": "line",
+            "name": "Passive retained line",
+            "voltage": "132000",
+            "operator": None,
+            "frequency": "50",
+            "cables": None,
+            "circuits": "1",
+            "location": None,
+            "lat": 22.605,
+            "lon": 114.305,
+            "tags_json": '{"voltage": "132000"}',
+            "geometry_json": '[{"lat": 22.60, "lon": 114.30}, {"lat": 22.61, "lon": 114.31}]',
+            "updated_at": "2026-01-01 00:00:00",
+        },
+    ]
+
+    strict_case = build_powermodels_preview(rows, snap_tolerance_km=0.2, solver_include_policy="strict_transmission")
+    demo_case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    validation = validate_powermodels_case(demo_case)
+
+    assert all(branch["source_id"] != "osm:way:92" for branch in strict_case["branch"].values())
+    assert any(branch["source_id"] == "osm:way:92" for branch in demo_case["branch"].values())
+    assert "passive_island" in {warning["code"] for warning in validation["warnings"]}
+
+
 def test_demo_full_osm_validation_warns_for_documented_inference() -> None:
     rows = [*_sample_rows(), *_sample_lamma_generation_rows()]
 

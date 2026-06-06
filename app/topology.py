@@ -910,6 +910,13 @@ def topology_preview_to_powermodels(
     )
     active_selection = _active_preview_bus_selection(raw_buses, raw_branches, raw_loads, tagged_generators)
     active_bus_ids = active_selection["active_bus_ids"]
+    if solver_include_policy == "demo_full_osm":
+        active_bus_ids.update(
+            str(endpoint)
+            for branch in raw_branches
+            for endpoint in (branch.get("from_bus_id"), branch.get("to_bus_id"))
+            if endpoint
+        )
     buses = [bus for bus in raw_buses if bus["id"] in active_bus_ids]
     branches = [
         branch
