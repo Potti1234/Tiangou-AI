@@ -204,6 +204,7 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert inferred_transformer["transformer_inference"]["method"] == "clear_voltage_mismatch_branch_conversion"
     assert case["_metadata"]["inferred_transformer_branch_count"] == 1
     assert case["_metadata"]["synthetic_branch_count"] == 0
+    assert case["_metadata"]["solver_circuit_class_counts"] == {"inter_facility": 1, "isolated": 1}
     assert case["_metadata"]["voltage_inference"] == {
         "tagged": 4,
         "inferred": 0,
@@ -227,6 +228,8 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
         branch["parameter_table"]
         for branch in case["branch"].values()
     } == {"underground_cable_defaults", "transformer_two_winding_defaults"}
+    assert {branch["circuit_class"] for branch in case["branch"].values()} == {"inter_facility", "isolated"}
+    assert all(branch["circuit_count"] >= 1 for branch in case["branch"].values())
     assert case["_metadata"]["parameter_lookup_tables"]["overhead_line_voltage_kv"] == [33.0, 110.0, 132.0, 220.0, 275.0, 400.0]
     assert case["_metadata"]["parameter_lookup_tables"]["underground_cable_voltage_kv"] == [33.0, 110.0, 132.0, 220.0, 275.0, 400.0]
     assert case["_metadata"]["parameter_lookup_tables"]["load_power_factor"] == 0.95
