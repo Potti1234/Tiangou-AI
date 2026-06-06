@@ -130,7 +130,7 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     ]
     assert manifest["solver_handoff"]["grids_solvable_path"] == str(grids_solvable_path)
     assert manifest["solver_handoff"]["n_per_mode"] == 3
-    assert manifest["exports"][0]["validation"]["status"] == "warning"
+    assert manifest["exports"][0]["validation"]["status"] == "ok"
 
 
 def test_export_hong_kong_phase1_bundle_writes_intertie_derate_stress_cases(tmp_path) -> None:

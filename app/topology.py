@@ -448,7 +448,8 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
     ]
     raw_loads = list(topology["loads"])
     tagged_generators = _tagged_generators(topology.get("generators", []))
-    active_bus_ids = _active_preview_bus_ids(raw_buses, raw_branches, raw_loads, tagged_generators)
+    active_selection = _active_preview_bus_selection(raw_buses, raw_branches, raw_loads, tagged_generators)
+    active_bus_ids = active_selection["active_bus_ids"]
     buses = [bus for bus in raw_buses if bus["id"] in active_bus_ids]
     branches = [
         branch
@@ -571,6 +572,9 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "gen_count": len(gen_dict),
             "dropped_passive_bus_count": len(raw_buses) - len(buses),
             "dropped_passive_branch_count": len(raw_branches) - len(branches),
+            "dropped_no_load_generation_island_count": active_selection["dropped_no_load_generation_island_count"],
+            "dropped_no_load_generation_bus_count": active_selection["dropped_no_load_generation_bus_count"],
+            "dropped_no_load_generation_pmax_mw": active_selection["dropped_no_load_generation_pmax_mw"],
             "tagged_gen_count": len(tagged_generators),
             "equivalent_gen_count": len(equivalent_generators),
             "synthetic_branch_count": sum(1 for branch in branches if _is_synthetic_branch(branch)),
@@ -595,22 +599,42 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
     }
 
 
-def _active_preview_bus_ids(
+def _active_preview_bus_selection(
     buses: list[dict[str, Any]],
     branches: list[Mapping[str, Any]],
     loads: list[dict[str, Any]],
     tagged_generators: list[dict[str, Any]],
-) -> set[str]:
+) -> dict[str, Any]:
     seed_bus_ids = {load["bus_id"] for load in loads}
-    seed_bus_ids.update(generator["bus_id"] for generator in tagged_generators)
     if not seed_bus_ids:
-        return {bus["id"] for bus in buses}
+        return {
+            "active_bus_ids": {bus["id"] for bus in buses},
+            "dropped_no_load_generation_island_count": 0,
+            "dropped_no_load_generation_bus_count": 0,
+            "dropped_no_load_generation_pmax_mw": 0.0,
+        }
 
     active_bus_ids: set[str] = set()
+    dropped_generation_islands = 0
+    dropped_generation_bus_count = 0
+    dropped_generation_pmax_mw = 0.0
+    generator_pmax_by_bus_id: dict[str, float] = {}
+    for generator in tagged_generators:
+        generator_pmax_by_bus_id[generator["bus_id"]] = generator_pmax_by_bus_id.get(generator["bus_id"], 0.0) + float(generator["pmax_mw"])
+
     for component in _preview_components(buses, branches):
         if component & seed_bus_ids:
             active_bus_ids.update(component)
-    return active_bus_ids
+        elif component & set(generator_pmax_by_bus_id):
+            dropped_generation_islands += 1
+            dropped_generation_bus_count += len(component)
+            dropped_generation_pmax_mw += sum(generator_pmax_by_bus_id.get(bus_id, 0.0) for bus_id in component)
+    return {
+        "active_bus_ids": active_bus_ids,
+        "dropped_no_load_generation_island_count": dropped_generation_islands,
+        "dropped_no_load_generation_bus_count": dropped_generation_bus_count,
+        "dropped_no_load_generation_pmax_mw": round(dropped_generation_pmax_mw, 3),
+    }
 
 
 def _infer_missing_bus_voltages(
@@ -1189,7 +1213,7 @@ def _hk_intertie_branches(
                 "x_ohm_per_km": 0.16,
                 "b_us_per_km": 18.0,
                 "rate_mva": round(HK_INTERTIE_RATE_MVA * derate, 3),
-                "matched_voltage_kv": 132.0,
+                "matched_voltage_kv": voltage_kv,
             },
             "endpoint_quality": [
                 {"snap": "synthetic_public_intertie", "bus_id": clp_bus["id"]},

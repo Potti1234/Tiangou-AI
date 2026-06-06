@@ -282,6 +282,23 @@ def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
             "geometry_json": None,
             "updated_at": "2026-01-01 00:00:00",
         },
+        {
+            "osm_type": "way",
+            "osm_id": 51,
+            "power": "line",
+            "name": "Tagged Plant Interconnect",
+            "voltage": "400000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": "1",
+            "location": None,
+            "lat": 22.31,
+            "lon": 114.11,
+            "tags_json": '{"operator": "CLP Power", "voltage": "400000"}',
+            "geometry_json": '[{"lat": 22.32, "lon": 114.12}, {"lat": 22.30, "lon": 114.10}]',
+            "updated_at": "2026-01-01 00:00:00",
+        },
     ]
 
     topology = build_topology_preview(rows, snap_tolerance_km=0.2)
@@ -299,6 +316,39 @@ def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
     assert tagged_export["energy_source"] == "gas"
     assert tagged_export["resource_type"] == "local_osm_generator"
     assert tagged_export["cost_class"] == "thermal_gas"
+
+
+def test_powermodels_preview_prunes_disconnected_no_load_generation_island() -> None:
+    rows = [
+        *_sample_rows(),
+        {
+            "osm_type": "node",
+            "osm_id": 55,
+            "power": "plant",
+            "name": "Disconnected Plant",
+            "voltage": "132000",
+            "operator": None,
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.60,
+            "lon": 114.40,
+            "tags_json": '{"generator:source": "gas", "generator:output:electricity": "50 MW"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+    ]
+
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    validation = validate_powermodels_case(case)
+
+    assert case["_metadata"]["dropped_no_load_generation_island_count"] == 1
+    assert case["_metadata"]["dropped_no_load_generation_bus_count"] == 1
+    assert case["_metadata"]["dropped_no_load_generation_pmax_mw"] == 50.0
+    assert case["_metadata"]["tagged_gen_count"] == 0
+    assert all(generator["source_id"] != "gen:node:55" for generator in case["gen"].values())
+    assert validation["metrics"]["island_count"] == 2
 
 
 def test_powermodels_preview_connects_load_islands_with_synthetic_backbone() -> None:
