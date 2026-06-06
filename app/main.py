@@ -9,6 +9,13 @@ import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.assumptions.contingencies import contingency_assumption_tables
+from app.assumptions.data_centers import data_center_assumption_tables
+from app.assumptions.generators import generator_assumption_tables
+from app.assumptions.imports import import_assumption_tables
+from app.assumptions.lines import line_assumption_tables
+from app.assumptions.transformers import transformer_assumption_tables
+from app.assumptions.validation import build_assumption_validation_summary
 from app.config import settings
 from app.data_sources import load_calibration_bundle
 from app.database import get_db, init_db
@@ -346,6 +353,41 @@ def calibration_summary(year: int | None = None) -> dict[str, Any]:
         return load_calibration_bundle(Path("data/raw"), year=year).to_dict()
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/assumptions/summary")
+def assumptions_summary() -> dict[str, Any]:
+    return build_assumption_validation_summary()
+
+
+@app.get("/assumptions/lines")
+def assumptions_lines() -> list[dict[str, Any]]:
+    return line_assumption_tables()
+
+
+@app.get("/assumptions/transformers")
+def assumptions_transformers() -> list[dict[str, Any]]:
+    return transformer_assumption_tables()
+
+
+@app.get("/assumptions/data-centers")
+def assumptions_data_centers() -> list[dict[str, Any]]:
+    return data_center_assumption_tables()
+
+
+@app.get("/assumptions/generators")
+def assumptions_generators() -> list[dict[str, Any]]:
+    return generator_assumption_tables()
+
+
+@app.get("/assumptions/contingencies")
+def assumptions_contingencies() -> list[dict[str, Any]]:
+    return contingency_assumption_tables()
+
+
+@app.get("/assumptions/imports")
+def assumptions_imports() -> list[dict[str, Any]]:
+    return import_assumption_tables()
 
 
 @app.get("/regions")

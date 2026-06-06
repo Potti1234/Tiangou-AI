@@ -72,6 +72,14 @@ Invoke-RestMethod http://127.0.0.1:8000/grid/topology/validation
 
 Validation returns structural errors separately from research-model quality metrics such as `low_confidence_counts`, `provenance_summary`, and branch-to-bus voltage mismatch diagnostics. Severe branch voltage mismatches are surfaced as warnings before solver handoff.
 
+Inspect the assumption-table scaffold and provenance validation summary:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/assumptions/summary
+```
+
+The scaffold lives under `data/assumptions/` and defines the auditable CSV schemas for future line, transformer, demand-profile, data-center, generator, contingency, and import assumptions. Slice 1 intentionally ships schema-only CSVs; later enrichment slices must fill rows with `observed_public`, `inferred_from_public_statistics`, or `synthetic_engineering_default` provenance plus confidence, method, source, unit, assumptions, and date/year fields. Drilldown endpoints are available at `/assumptions/lines`, `/assumptions/transformers`, `/assumptions/data-centers`, `/assumptions/generators`, `/assumptions/contingencies`, and `/assumptions/imports`.
+
 Write the preview to a file for the downstream Julia solver pipeline:
 
 ```powershell
