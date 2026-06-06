@@ -92,6 +92,73 @@ def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
     assert clp_loads["osm:node:2"]["pd_mw"] == 2934.4
 
 
+def test_topology_preview_snaps_to_facility_footprint_buffer() -> None:
+    rows = [
+        {
+            "osm_type": "way",
+            "osm_id": 140,
+            "power": "substation",
+            "name": "Footprint Substation",
+            "voltage": "132000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.30,
+            "lon": 114.10,
+            "tags_json": '{"operator": "CLP Power", "voltage": "132000"}',
+            "geometry_json": '[{"lat": 22.3000, "lon": 114.1000}, {"lat": 22.3010, "lon": 114.1000}]',
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "node",
+            "osm_id": 141,
+            "power": "substation",
+            "name": "Remote Substation",
+            "voltage": "132000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.31,
+            "lon": 114.11,
+            "tags_json": '{"operator": "CLP Power", "voltage": "132000"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "way",
+            "osm_id": 142,
+            "power": "line",
+            "name": "Footprint Tie",
+            "voltage": "132000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": "1",
+            "location": None,
+            "lat": 22.305,
+            "lon": 114.105,
+            "tags_json": '{"operator": "CLP Power", "voltage": "132000"}',
+            "geometry_json": '[{"lat": 22.3010, "lon": 114.1000}, {"lat": 22.3100, "lon": 114.1100}]',
+            "updated_at": "2026-01-01 00:00:00",
+        },
+    ]
+
+    topology = build_topology_preview(rows, snap_tolerance_km=0.01)
+
+    branch = topology["branches"][0]
+    footprint_bus = next(bus for bus in topology["buses"] if bus["id"] == "osm:way:140")
+    assert branch["from_bus_id"] == "osm:way:140"
+    assert branch["endpoint_quality"][0]["snap"] == "matched"
+    assert footprint_bus["facility_match_method"] == "geometry_footprint"
+    assert footprint_bus["facility_radius_km"] > 0.1
+    assert topology["quality"]["facility_footprint_count"] == 1
+    assert topology["quality"]["buffered_point_facility_count"] == 1
+
+
 def test_topology_preview_merges_fragmented_same_voltage_circuits() -> None:
     rows = [
         {

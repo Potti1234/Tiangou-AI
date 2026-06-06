@@ -89,6 +89,9 @@ EQUIVALENT_GENERATOR_DEFAULTS = {
     "hk-electric": {"cost": [0.01, 24.0, 0.0], "cost_class": "island_local_supply_equivalent", "pmin_fraction": 0.0, "power_factor": 0.86},
     "default": {"cost": [0.01, 30.0, 0.0], "cost_class": "generic_capacity_equivalent", "pmin_fraction": 0.0, "power_factor": 0.86},
 }
+FACILITY_FOOTPRINT_RADIUS_MIN_KM = 0.02
+FACILITY_FOOTPRINT_RADIUS_MAX_KM = 0.25
+POINT_FACILITY_BUFFER_KM = 0.15
 
 
 def _load_json(value: Any, default: Any) -> Any:
@@ -264,29 +267,32 @@ def _nearest_bus(
     *,
     voltage_kv: float | None = None,
 ) -> tuple[str | None, float | None]:
-    best_id = None
-    best_distance = None
-    best_voltage_delta = None
+    candidates = []
     for bus in buses:
         if bus["lat"] is None or bus["lon"] is None:
             continue
         distance = _haversine_km(point, (bus["lat"], bus["lon"]))
+        effective_distance = max(0.0, distance - float(bus.get("facility_radius_km") or 0.0))
         bus_voltage = bus.get("base_kv")
         voltage_delta = abs(float(bus_voltage) - voltage_kv) if bus_voltage is not None and voltage_kv is not None else math.inf
-        if (
-            best_distance is None
-            or distance < best_distance
-            or (
-                abs(distance - best_distance) <= 1e-6
-                and voltage_delta < (best_voltage_delta if best_voltage_delta is not None else math.inf)
-            )
-        ):
-            best_id = bus["id"]
-            best_distance = distance
-            best_voltage_delta = voltage_delta
-    if best_distance is None or best_distance > snap_tolerance_km:
-        return None, best_distance
-    return best_id, best_distance
+        candidates.append(
+            {
+                "id": bus["id"],
+                "distance": distance,
+                "effective_distance": effective_distance,
+                "voltage_delta": voltage_delta,
+            }
+        )
+    if not candidates:
+        return None, None
+    nearest_actual = min(candidates, key=lambda candidate: (candidate["distance"], candidate["voltage_delta"]))
+    if nearest_actual["distance"] <= snap_tolerance_km:
+        return str(nearest_actual["id"]), float(nearest_actual["distance"])
+    nearest_effective = min(candidates, key=lambda candidate: (candidate["effective_distance"], candidate["distance"], candidate["voltage_delta"]))
+    footprint_margin_km = min(snap_tolerance_km, FACILITY_FOOTPRINT_RADIUS_MIN_KM)
+    if nearest_effective["effective_distance"] > footprint_margin_km:
+        return None, nearest_actual["distance"]
+    return str(nearest_effective["id"]), float(nearest_effective["distance"])
 
 
 def _branch_defaults(power: str, voltage_kv: float | None) -> dict[str, Any]:
@@ -558,6 +564,24 @@ def _row_to_record(row: Any) -> dict[str, Any]:
     return data
 
 
+def _facility_radius_km(record: Mapping[str, Any], lat: float | None, lon: float | None) -> tuple[float, str]:
+    if lat is None or lon is None:
+        return 0.0, "none"
+    geometry = record.get("geometry") or []
+    coords = [
+        (point.get("lat"), point.get("lon"))
+        for point in geometry
+        if point.get("lat") is not None and point.get("lon") is not None
+    ]
+    if coords:
+        radius = max(_haversine_km((lat, lon), (float(point_lat), float(point_lon))) for point_lat, point_lon in coords)
+        capped_radius = min(radius, FACILITY_FOOTPRINT_RADIUS_MAX_KM)
+        return round(max(capped_radius, FACILITY_FOOTPRINT_RADIUS_MIN_KM), 6), "geometry_footprint"
+    if record.get("asset_kind") == "bus_candidate" and record.get("power") in {"plant", "generator", "substation", "sub_station", "transformer"}:
+        return POINT_FACILITY_BUFFER_KM, "buffered_point_facility"
+    return 0.0, "point"
+
+
 def _bus_id_for_voltage_level(base_bus_id: str, voltage_kv: float | None, voltage_levels: list[float | None]) -> str:
     if len([value for value in voltage_levels if value is not None]) <= 1:
         return base_bus_id
@@ -593,6 +617,7 @@ def build_topology_preview(
         base_bus_id = f"osm:{record['osm_type']}:{record['osm_id']}"
         facility_id = base_bus_id
         voltage_levels = record["voltage_kv"] or [None]
+        facility_radius_km, facility_match_method = _facility_radius_km(record, record.get("lat"), record.get("lon"))
         for base_kv in sorted(voltage_levels, reverse=True, key=lambda value: value or 0.0):
             if _below_min_voltage(base_kv, min_voltage_kv):
                 continue
@@ -606,6 +631,8 @@ def build_topology_preview(
                     "power": record["power"],
                     "lat": record.get("lat"),
                     "lon": record.get("lon"),
+                    "facility_radius_km": facility_radius_km,
+                    "facility_match_method": facility_match_method,
                     "base_kv": base_kv,
                     "voltage_band": voltage_band(base_kv),
                     "service_territory": record["service_territory"],
@@ -665,6 +692,8 @@ def build_topology_preview(
                         "power": "inferred_terminal",
                         "lat": point[0],
                         "lon": point[1],
+                        "facility_radius_km": 0.0,
+                        "facility_match_method": "synthetic_endpoint",
                         "base_kv": max(record["voltage_kv"]) if record["voltage_kv"] else None,
                         "voltage_band": voltage_band(max(record["voltage_kv"]) if record["voltage_kv"] else None),
                         "service_territory": record["service_territory"],
@@ -854,6 +883,9 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "confidence": bus.get("confidence"),
             "service_territory": bus.get("service_territory"),
             "voltage_band": bus.get("voltage_band"),
+            "facility_id": bus.get("facility_id"),
+            "facility_radius_km": bus.get("facility_radius_km"),
+            "facility_match_method": bus.get("facility_match_method"),
         }
 
     bus_by_id = {bus["id"]: bus for bus in buses}
@@ -2203,6 +2235,8 @@ def _quality_summary(
 ) -> dict[str, Any]:
     branches_without_voltage = sum(1 for branch in branches if branch["voltage_kv"] is None)
     synthetic_bus_count = sum(1 for bus in buses if bus["id"].startswith("synthetic:"))
+    facility_footprint_count = sum(1 for bus in buses if bus.get("facility_match_method") == "geometry_footprint")
+    buffered_point_facility_count = sum(1 for bus in buses if bus.get("facility_match_method") == "buffered_point_facility")
     support_count = sum(1 for record in records if record["asset_kind"] == "support")
     filtered_low_voltage_count = sum(
         1
@@ -2216,6 +2250,8 @@ def _quality_summary(
         "support_record_count": support_count,
         "branches_without_voltage": branches_without_voltage,
         "synthetic_bus_count": synthetic_bus_count,
+        "facility_footprint_count": facility_footprint_count,
+        "buffered_point_facility_count": buffered_point_facility_count,
         "filtered_low_voltage_count": filtered_low_voltage_count,
         "notes": [
             "Synthetic buses indicate line or cable endpoints that did not snap to a known substation or terminal.",
