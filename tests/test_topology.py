@@ -28,6 +28,7 @@ def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
     assert preview["metadata"]["bus_count"] == 4
     assert preview["metadata"]["branch_count"] == 2
     assert preview["metadata"]["load_count"] == 4
+    assert preview["metadata"]["demand_allocation_method"] == "voltage_weighted_substation_split"
     assert preview["quality"]["synthetic_bus_count"] == 2
 
     snapped_branch = next(branch for branch in preview["branches"] if branch["id"] == "osm:way:10")
@@ -42,6 +43,12 @@ def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
 
     territories = {load["service_territory"] for load in preview["loads"]}
     assert territories == {"clp", "hk-electric"}
+    clp_loads = {load["bus_id"]: load for load in preview["loads"] if load["service_territory"] == "clp"}
+    assert clp_loads["osm:node:1"]["allocation_method"] == "voltage_weighted_substation_split"
+    assert clp_loads["osm:node:1"]["allocation_weight"] == 3.0
+    assert clp_loads["osm:node:2"]["allocation_weight"] == 2.0
+    assert clp_loads["osm:node:1"]["pd_mw"] == 4401.6
+    assert clp_loads["osm:node:2"]["pd_mw"] == 2934.4
 
 
 def test_powermodels_preview_exports_solver_handoff_shape() -> None:
@@ -52,6 +59,8 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert case["_metadata"]["total_pd_mw"] == 9591.0
     assert case["_metadata"]["gen_count"] == 2
     assert case["_metadata"]["reference_bus_count"] == 2
+    assert case["_metadata"]["demand_allocation_method"] == "voltage_weighted_substation_split"
+    assert case["_metadata"]["load_power_factor"] == 0.95
 
     assert sorted(case["bus"]) == ["1", "2", "3", "4"]
     assert sum(1 for bus in case["bus"].values() if bus["bus_type"] == 3) == 2
@@ -63,7 +72,8 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert all(len(generator["cost"]) == 3 for generator in case["gen"].values())
     assert all(bus["provenance"] in {"osm", "osm_branch_endpoint"} for bus in case["bus"].values())
     assert all(branch["parameter_source"] == "osm_with_inferred_parameters" for branch in case["branch"].values())
-    assert all(load["provenance"] == "public_peak_demand_scaled_equal_substation_split" for load in case["load"].values())
+    assert all(load["provenance"] == "public_peak_demand_scaled_voltage_weighted_substation_split" for load in case["load"].values())
+    assert all(load["allocation_method"] == "voltage_weighted_substation_split" for load in case["load"].values())
     assert case["_metadata"]["provenance_summary"]["branch"] == {"osm_with_inferred_parameters": 2}
     assert case["_metadata"]["provenance_summary"]["gen"] == {"public_peak_demand_capacity_equivalent": 2}
     assert sum(load["pd"] for load in case["load"].values()) == 95.91
@@ -254,7 +264,7 @@ def test_powermodels_validation_reports_islands_and_capacity() -> None:
     assert validation["metrics"]["total_pd_mw"] == 9591.0
     assert validation["metrics"]["low_confidence_counts"] == {"branch": 0, "bus": 2, "gen": 2, "load": 4}
     assert validation["metrics"]["provenance_summary"]["load"] == {
-        "public_peak_demand_scaled_equal_substation_split": 4
+        "public_peak_demand_scaled_voltage_weighted_substation_split": 4
     }
     assert validation["errors"] == []
     assert all(island["reference_bus_count"] == 1 for island in validation["islands"])

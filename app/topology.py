@@ -370,6 +370,8 @@ def build_topology_preview(
             "demand_snapshot": demand_snapshot,
             "demand_snapshot_label": snapshot["label"],
             "load_factor": snapshot["load_factor"],
+            "demand_allocation_method": "voltage_weighted_substation_split",
+            "load_power_factor": 0.95,
             "include_hk_interties": include_hk_interties,
             "hk_intertie_derate": hk_intertie_derate,
             "min_voltage_kv": min_voltage_kv,
@@ -482,6 +484,8 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "confidence": load.get("confidence"),
             "service_territory": load.get("service_territory"),
             "snapshot": load.get("snapshot"),
+            "allocation_method": load.get("allocation_method"),
+            "allocation_weight": load.get("allocation_weight"),
         }
 
     gen_dict = {}
@@ -511,6 +515,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
         "name": "hong_kong_osm_preview",
         "source_version": "tiangou.powermodels_preview.v1",
         "demand_snapshot": topology["metadata"]["demand_snapshot"],
+        "demand_allocation_method": topology["metadata"]["demand_allocation_method"],
         "include_hk_interties": topology["metadata"]["include_hk_interties"],
         "hk_intertie_derate": topology["metadata"]["hk_intertie_derate"],
         "min_voltage_kv": topology["metadata"]["min_voltage_kv"],
@@ -529,6 +534,8 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "demand_snapshot": topology["metadata"]["demand_snapshot"],
             "demand_snapshot_label": topology["metadata"]["demand_snapshot_label"],
             "load_factor": topology["metadata"]["load_factor"],
+            "demand_allocation_method": topology["metadata"]["demand_allocation_method"],
+            "load_power_factor": topology["metadata"]["load_power_factor"],
             "include_hk_interties": topology["metadata"]["include_hk_interties"],
             "hk_intertie_derate": topology["metadata"]["hk_intertie_derate"],
             "min_voltage_kv": topology["metadata"]["min_voltage_kv"],
@@ -1100,22 +1107,44 @@ def _allocate_loads(
         ]
         if not eligible:
             continue
-        pd_mw = peak_mw * load_factor / len(eligible)
+        weights = {bus["id"]: _load_allocation_weight(bus) for bus in eligible}
+        total_weight = sum(weights.values())
         for bus in eligible:
+            weight = weights[bus["id"]]
+            pd_mw = peak_mw * load_factor * weight / total_weight
             loads.append(
                 {
                     "id": f"load:{territory}:{bus['id']}",
                     "bus_id": bus["id"],
                     "service_territory": territory,
                     "pd_mw": round(pd_mw, 3),
-                    "qd_mvar": round(pd_mw * 0.329, 3),
+                    "qd_mvar": round(_reactive_mvar(pd_mw), 3),
                     "snapshot": demand_snapshot,
-                    "provenance": "public_peak_demand_scaled_equal_substation_split",
+                    "provenance": "public_peak_demand_scaled_voltage_weighted_substation_split",
+                    "allocation_method": "voltage_weighted_substation_split",
                     "load_factor": load_factor,
+                    "allocation_weight": round(weight, 6),
                     "confidence": 0.35,
                 }
             )
     return loads
+
+
+def _load_allocation_weight(bus: Mapping[str, Any]) -> float:
+    base_kv = bus.get("base_kv")
+    if base_kv is None:
+        return 1.0
+    if base_kv >= 220:
+        return 3.0
+    if base_kv >= 100:
+        return 2.0
+    if base_kv >= 33:
+        return 1.0
+    return 0.5
+
+
+def _reactive_mvar(pd_mw: float, *, power_factor: float = 0.95) -> float:
+    return pd_mw * math.tan(math.acos(power_factor))
 
 
 def _quality_summary(
