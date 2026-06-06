@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from app.assumptions.contingencies import contingency_assumption_tables
 from app.assumptions.data_centers import data_center_assumption_tables, estimate_data_center_load
@@ -20,6 +21,10 @@ from app.assumptions.validation import build_assumption_validation_summary
 from app.config import settings
 from app.data_sources import load_calibration_bundle
 from app.database import get_db, init_db
+from app.dynamic.adapter import DynamicGridConfig, build_dynamic_config
+from app.dynamic.dual_timeline import DualTimelineSimulation
+from app.dynamic.pinn_model import load_pinn_checkpoint
+from app.dynamic.scenarios import build_scenarios, scenario_by_id
 from app.load_proxies import PROXY_GROUPS, normalize_consumer_proxy_element, rows_to_consumer_proxies
 from app.overpass import OverpassClient, OverpassError, build_consumer_proxy_query, build_power_query
 from app.regions import REGIONS, get_region
@@ -82,8 +87,17 @@ class DashboardSnapshotParams:
     asset_limit: int = 5000
 
 
+class DynamicSimulateRequest(BaseModel):
+    scenario: str
+    duration_s: int = 400
+    demand_snapshot: str = "peak_16h"
+    model_mode: str = "full_demo"
+
+
 _DASHBOARD_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 _DASHBOARD_CACHE_LOCK = RLock()
+_DYNAMIC_PINN_MODEL: Any | None = None
+_DYNAMIC_PINN_STATUS: dict[str, Any] | None = None
 
 
 @asynccontextmanager
@@ -487,6 +501,74 @@ def _build_dashboard_snapshot(params: DashboardSnapshotParams) -> dict[str, Any]
     return snapshot
 
 
+def _dynamic_snapshot_params(demand_snapshot: str = "peak_16h", model_mode: str = "full_demo") -> DashboardSnapshotParams:
+    if demand_snapshot not in DEMAND_SNAPSHOTS:
+        raise HTTPException(status_code=400, detail=f"Unknown demand_snapshot '{demand_snapshot}'.")
+    if model_mode not in {"full_demo", "transmission"}:
+        raise HTTPException(status_code=400, detail="model_mode must be 'full_demo' or 'transmission'.")
+    return DashboardSnapshotParams(
+        region_key="hong-kong",
+        snap_tolerance_km=0.75,
+        demand_snapshot=demand_snapshot,
+        include_hk_interties=True,
+        hk_intertie_derate=1.0,
+        min_voltage_kv=None if model_mode == "full_demo" else 100.0,
+        solver_include_policy="demo_full_osm" if model_mode == "full_demo" else "strict_transmission",
+        min_solver_generator_mw=DEFAULT_MIN_SOLVER_GENERATOR_MW,
+        include_synthetic_generator_connections=model_mode == "full_demo",
+        asset_limit=1,
+    )
+
+
+def _dynamic_consumer_proxies(region_key: str = "hong-kong", limit: int = 500) -> list[dict[str, Any]]:
+    return _important_proxy_markers_for_analytics(region_key, limit=limit)
+
+
+def _build_dynamic_grid_config(demand_snapshot: str = "peak_16h", model_mode: str = "full_demo") -> DynamicGridConfig:
+    params = _dynamic_snapshot_params(demand_snapshot=demand_snapshot, model_mode=model_mode)
+    snapshot = _build_dashboard_snapshot(params)
+    return build_dynamic_config(
+        snapshot["powermodels_case"],
+        consumer_proxies=_dynamic_consumer_proxies(params.region_key, limit=500),
+        demand_snapshot=demand_snapshot,
+    )
+
+
+def _dynamic_pinn() -> tuple[Any, dict[str, Any]]:
+    global _DYNAMIC_PINN_MODEL, _DYNAMIC_PINN_STATUS
+    if _DYNAMIC_PINN_MODEL is not None and _DYNAMIC_PINN_STATUS is not None:
+        return _DYNAMIC_PINN_MODEL, _DYNAMIC_PINN_STATUS
+    checkpoint_candidates = [Path("app/dynamic/pinn_checkpoint.pt"), Path("data/models/pinn_checkpoint.pt")]
+    checkpoint_path = next((path for path in checkpoint_candidates if path.exists()), checkpoint_candidates[0])
+    model, loaded, reason = load_pinn_checkpoint(str(checkpoint_path))
+    param_count = sum(param.numel() for param in model.parameters()) if hasattr(model, "parameters") else 0
+    _DYNAMIC_PINN_MODEL = model
+    _DYNAMIC_PINN_STATUS = {
+        "checkpoint_loaded": loaded,
+        "checkpoint_path": str(checkpoint_path),
+        "checkpoint_status": "loaded" if loaded else reason,
+        "H_estimated": model.get_H_estimate(),
+        "model_params": param_count,
+        "startup_training": False,
+        "training_data_dependency": "No API startup dependency on Spain_Blackout_28Apr2025_Dataset.xlsx.",
+    }
+    return model, _DYNAMIC_PINN_STATUS
+
+
+def _dynamic_grid_source_payload(config: DynamicGridConfig) -> dict[str, Any]:
+    return {
+        "schema": "tiangou.dynamic.real_grid.v1",
+        "source": "powermodels_case",
+        "provenance_summary": config.provenance,
+        "source_mapping": config.source_mapping,
+        "synthetic_assumption_counts": {
+            "ev_station_count": len(config.ev_stations),
+            "data_center_count": len(config.data_centers),
+            "synthetic_or_inferred_source_count": config.provenance.get("synthetic_or_inferred_source_count", 0),
+        },
+    }
+
+
 def _chart_rows_from_counts(counts: dict[str, int | float], *, value_key: str = "value") -> list[dict[str, Any]]:
     return [
         {"label": label.replace("_", " "), "key": label, value_key: value}
@@ -799,6 +881,65 @@ def regions() -> list[dict[str, Any]]:
         {"key": region.key, "label": region.label, "area_names": region.area_names}
         for region in REGIONS.values()
     ]
+
+
+@app.get("/dynamic/config")
+def dynamic_config(
+    demand_snapshot: str = Query(default="peak_16h", pattern=DEMAND_SNAPSHOT_PATTERN),
+    model_mode: str = "full_demo",
+) -> dict[str, Any]:
+    config = _build_dynamic_grid_config(demand_snapshot=demand_snapshot, model_mode=model_mode)
+    return {
+        "grid_config": config.grid_config,
+        "demand_profile_mw": config.demand_profile_mw,
+        "ev_stations": config.ev_stations,
+        "data_centers": config.data_centers,
+        "source_mapping": config.source_mapping,
+        "provenance": config.provenance,
+        "grid_source": _dynamic_grid_source_payload(config),
+    }
+
+
+@app.get("/dynamic/scenarios")
+def dynamic_scenarios(
+    demand_snapshot: str = Query(default="peak_16h", pattern=DEMAND_SNAPSHOT_PATTERN),
+    model_mode: str = "full_demo",
+) -> dict[str, Any]:
+    config = _build_dynamic_grid_config(demand_snapshot=demand_snapshot, model_mode=model_mode)
+    return {
+        "scenarios": build_scenarios(config),
+        "grid_source": _dynamic_grid_source_payload(config),
+    }
+
+
+@app.post("/dynamic/simulate")
+def dynamic_simulate(req: DynamicSimulateRequest) -> dict[str, Any]:
+    if req.duration_s < 1 or req.duration_s > 3600:
+        raise HTTPException(status_code=400, detail="duration_s must be 1-3600")
+    config = _build_dynamic_grid_config(demand_snapshot=req.demand_snapshot, model_mode=req.model_mode)
+    scenario = scenario_by_id(config, req.scenario)
+    if scenario is None:
+        raise HTTPException(status_code=400, detail=f"Unknown dynamic scenario '{req.scenario}'.")
+    if not scenario.get("available", True):
+        raise HTTPException(status_code=400, detail=scenario.get("unavailable_reason", "Scenario is unavailable."))
+    pinn, pinn_status = _dynamic_pinn()
+    start_hour = 4 if req.demand_snapshot == "overnight_04h" else 16
+    result = DualTimelineSimulation(
+        pinn,
+        config.grid_config,
+        config.demand_profile_mw,
+        config.ev_stations,
+    ).run(scenario, duration_s=req.duration_s, start_hour=start_hour)
+    result["scenario_payload"] = scenario
+    result["grid_source"] = _dynamic_grid_source_payload(config)
+    result["pinn_status"] = pinn_status
+    return result
+
+
+@app.get("/dynamic/pinn-status")
+def dynamic_pinn_status() -> dict[str, Any]:
+    _, status = _dynamic_pinn()
+    return status
 
 
 @app.get("/overpass-query/{region_key}")
