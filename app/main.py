@@ -51,6 +51,7 @@ from app.topology import (
     topology_preview_to_powermodels,
     validate_powermodels_case,
 )
+from app.verify_gridsfm_handoff import verify_handoff_artifacts
 
 
 DEMAND_SNAPSHOT_PATTERN = f"^({'|'.join(sorted(DEMAND_SNAPSHOTS))})$"
@@ -126,19 +127,36 @@ def _element_detail(row: Any) -> dict[str, Any]:
 
 def _handoff_artifact_summary() -> dict[str, Any]:
     exists = {name: Path(path).exists() for name, path in HANDOFF_ARTIFACT_PATHS.items()}
-    present_count = sum(1 for value in exists.values() if value)
-    status = "complete" if present_count == len(exists) else "warning" if present_count else "not_run"
     manifest_path = Path("data/processed/hong_kong_phase1_manifest.json")
     manifest: dict[str, Any] | None = None
+    artifact_report: dict[str, Any] | None = None
     if manifest_path.exists():
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             manifest = {"status": "error", "error": "Manifest exists but could not be parsed as JSON."}
+        else:
+            artifact_report = verify_handoff_artifacts(manifest_path)
+
+    freshness = _handoff_freshness_from_report(artifact_report)
+    generated = {
+        "raw_json": freshness["raw_exports_fresh"],
+        "solvable_json": freshness["solvable_exports_fresh"],
+        "pyg_json": freshness["pyg_exports_fresh"],
+        "scenarios": freshness["scenario_artifacts_fresh"],
+    }
+    present_count = sum(1 for value in exists.values() if value)
+    if artifact_report is not None:
+        status = "complete" if artifact_report["status"] == "ok" else "warning"
+    else:
+        status = "warning" if present_count else "not_run"
     return {
         "status": status,
         "paths": HANDOFF_ARTIFACT_PATHS,
         "exists": exists,
+        "generated": generated,
+        "freshness": freshness,
+        "artifact_report": artifact_report,
         "manifest_path": str(manifest_path),
         "manifest_exists": manifest_path.exists(),
         "manifest": manifest,
@@ -146,6 +164,32 @@ def _handoff_artifact_summary() -> dict[str, Any]:
             "The refreshed 57-bus/63-branch case can export raw PowerModels, but the Julia AC relaxation may fail "
             "after DC warm-start because the synthetic/demo grid is not yet AC-feasible."
         ),
+    }
+
+
+def _handoff_freshness_from_report(report: dict[str, Any] | None) -> dict[str, Any]:
+    if report is None:
+        return {
+            "raw_exports_fresh": False,
+            "solvable_exports_fresh": False,
+            "pyg_exports_fresh": False,
+            "scenario_artifacts_fresh": False,
+            "stale_codes": [],
+            "error_codes": [],
+        }
+    metrics = report.get("metrics", {})
+    export_count = int(metrics.get("export_count") or 0)
+    expected_scenarios = int(metrics.get("expected_minimum_scenario_json_count") or 0)
+    scenario_count = int(metrics.get("scenario_json_count") or 0)
+    stale_scenarios = int(metrics.get("stale_scenario_json_count") or 0)
+    error_codes = [str(error.get("code")) for error in report.get("errors", []) if isinstance(error, dict)]
+    return {
+        "raw_exports_fresh": export_count > 0 and int(metrics.get("raw_count") or 0) == export_count,
+        "solvable_exports_fresh": export_count > 0 and int(metrics.get("fresh_solvable_count") or 0) == export_count,
+        "pyg_exports_fresh": export_count > 0 and int(metrics.get("fresh_pyg_count") or 0) == export_count,
+        "scenario_artifacts_fresh": expected_scenarios > 0 and scenario_count >= expected_scenarios and stale_scenarios == 0,
+        "stale_codes": [code for code in error_codes if code.startswith("stale_")],
+        "error_codes": error_codes,
     }
 
 
@@ -292,10 +336,12 @@ def _pipeline_summary_payload(
         "handoff_artifact_exists": handoff_artifacts["exists"],
         "handoff_artifact_status": {
             "status": handoff_artifacts["status"],
-            "raw_powermodels_export_generated": handoff_artifacts["exists"]["raw_json"],
-            "gridsfm_relaxed_solvable_json_generated": handoff_artifacts["exists"]["solvable_json"],
-            "pyg_export_generated": handoff_artifacts["exists"]["pyg_json"],
-            "scenario_files_generated": handoff_artifacts["exists"]["scenarios"],
+            "raw_powermodels_export_generated": handoff_artifacts["generated"]["raw_json"],
+            "gridsfm_relaxed_solvable_json_generated": handoff_artifacts["generated"]["solvable_json"],
+            "pyg_export_generated": handoff_artifacts["generated"]["pyg_json"],
+            "scenario_files_generated": handoff_artifacts["generated"]["scenarios"],
+            "freshness": handoff_artifacts["freshness"],
+            "verification": handoff_artifacts["artifact_report"],
             "manifest_path": handoff_artifacts["manifest_path"],
             "manifest_exists": handoff_artifacts["manifest_exists"],
             "manifest_export_count": len(handoff_artifacts["manifest"].get("exports", [])) if isinstance(handoff_artifacts.get("manifest"), dict) else 0,
@@ -597,6 +643,7 @@ def _analytics_from_snapshot(
             "synthetic_note": "Synthetic values are explainable defaults, not utility-confirmed equipment data.",
         },
         "solver_artifacts": summary["handoff_artifact_status"],
+        "model_parameters": summary["parameters"],
         "source_summary": {
             "dashboard_snapshot": "/grid/dashboard-snapshot",
             "powermodels_case": "powermodels_case",
@@ -1149,7 +1196,7 @@ def analytics_dashboard(
     region_key: str = "hong-kong",
     snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
     demand_snapshot: str = Query(default="peak_16h", pattern=DEMAND_SNAPSHOT_PATTERN),
-    include_hk_interties: bool = False,
+    include_hk_interties: bool = True,
     hk_intertie_derate: float = Query(default=1.0, gt=0.0, le=1.0),
     min_voltage_kv: float | None = Query(default=100.0, gt=0.0),
     solver_include_policy: str = Query(default=DEFAULT_SOLVER_INCLUDE_POLICY, pattern=SOLVER_INCLUDE_POLICY_PATTERN),
