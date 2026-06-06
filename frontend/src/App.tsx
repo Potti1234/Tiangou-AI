@@ -1673,11 +1673,13 @@ export function AnalyticsPage() {
   const query = useMemo(() => {
     const params = new URLSearchParams({
       region_key: "hong-kong",
-      min_voltage_kv: "100",
       include_hk_interties: modelMode === "full_demo" ? "true" : "false",
       solver_include_policy: modelMode === "full_demo" ? "demo_full_osm" : "strict_transmission",
       include_synthetic_generator_connections: modelMode === "full_demo" ? "true" : "false",
     })
+    if (modelMode === "transmission") {
+      params.set("min_voltage_kv", "100")
+    }
     return params.toString()
   }, [modelMode])
 

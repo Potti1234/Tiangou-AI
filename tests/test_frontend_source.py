@@ -71,6 +71,8 @@ def test_frontend_uses_shadcn_charts_for_analytics_dashboard() -> None:
     assert "TabsTrigger value=\"full_demo\"" in source
     assert "TabsTrigger value=\"transmission\"" in source
     assert "solver_include_policy: modelMode === \"full_demo\" ? \"demo_full_osm\" : \"strict_transmission\"" in source
+    assert 'if (modelMode === "transmission")' in source
+    assert 'params.set("min_voltage_kv", "100")' in source
     assert "missing or stale" in source
     assert "accessibilityLayer" in source
     assert "h-[220px] min-h-[220px]" in source or "h-[210px] min-h-[210px]" in source
