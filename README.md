@@ -7,8 +7,12 @@ FastAPI backend for collecting OpenStreetMap electricity grid data for Hong Kong
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cpu
 pip install -e ".[dev]"
 ```
+
+The CPU PyTorch wheel is required for the dynamic PINN checkpoint at `app/dynamic/pinn_checkpoint.pt`.
+The Docker API image installs the same CPU wheel before installing the app package.
 
 ## Run
 

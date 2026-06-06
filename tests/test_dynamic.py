@@ -105,7 +105,11 @@ def test_dynamic_api_scenarios_and_simulation(monkeypatch) -> None:
     assert scenarios_response.status_code == 200
     assert any(scenario["id"] == "combined_stress" for scenario in scenarios_response.json()["scenarios"])
     assert status_response.status_code == 200
-    assert status_response.json()["checkpoint_loaded"] is False
+    status_payload = status_response.json()
+    assert status_payload["checkpoint_status"] in {"loaded", "torch_unavailable", "checkpoint_missing"}
+    if status_payload["checkpoint_loaded"]:
+        assert status_payload["model_params"] > 0
+        assert status_payload["H_estimated"] > 0
     assert simulate_response.status_code == 200
     payload = simulate_response.json()
     assert payload["frames"]

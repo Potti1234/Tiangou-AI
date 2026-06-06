@@ -98,11 +98,13 @@ def load_pinn_checkpoint(path: str):
         state = torch.load(path, map_location="cpu")
         if isinstance(state, dict) and "model_state_dict" in state:
             state = state["model_state_dict"]
+        elif isinstance(state, dict) and "state_dict" in state:
+            state = state["state_dict"]
         model.load_state_dict(state)
+        model.eval()
         model.checkpoint_loaded = True
         return model, True, None
     except FileNotFoundError:
         return model, False, "checkpoint_missing"
     except Exception as exc:
         return model, False, f"checkpoint_unusable:{exc.__class__.__name__}"
-
