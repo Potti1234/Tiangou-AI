@@ -58,8 +58,12 @@ DEMAND_SNAPSHOT_PATTERN = f"^({'|'.join(sorted(DEMAND_SNAPSHOTS))})$"
 SOLVER_INCLUDE_POLICY_PATTERN = f"^({'|'.join(sorted(SOLVER_INCLUDE_POLICIES))})$"
 HANDOFF_ARTIFACT_PATHS = {
     "raw_json": "data/processed/hong_kong_16h_model.json",
+    "raw_demo_json": "data/processed/hong_kong_16h_model.json",
+    "solver_json": "data/processed/hong_kong_16h_model.solver_sanitized.json",
     "solvable_json": "data/processed/hong_kong_16h_model.solvable.json",
+    "solver_solvable_json": "data/processed/hong_kong_16h_model.solver_sanitized.solvable.json",
     "pyg_json": "data/processed/hong_kong_16h_model.pyg.json",
+    "solver_pyg_json": "data/processed/hong_kong_16h_model.solver_sanitized.pyg.json",
     "scenarios": "data/processed/scenarios",
 }
 
@@ -126,7 +130,6 @@ def _element_detail(row: Any) -> dict[str, Any]:
 
 
 def _handoff_artifact_summary() -> dict[str, Any]:
-    exists = {name: Path(path).exists() for name, path in HANDOFF_ARTIFACT_PATHS.items()}
     manifest_path = Path("data/processed/hong_kong_phase1_manifest.json")
     manifest: dict[str, Any] | None = None
     artifact_report: dict[str, Any] | None = None
@@ -138,11 +141,20 @@ def _handoff_artifact_summary() -> dict[str, Any]:
         else:
             artifact_report = verify_handoff_artifacts(manifest_path)
 
+    paths = _handoff_paths_from_manifest(manifest) if isinstance(manifest, dict) else dict(HANDOFF_ARTIFACT_PATHS)
+    exists = {name: Path(path).exists() for name, path in paths.items()}
     freshness = _handoff_freshness_from_report(artifact_report)
+    raw_demo_exports = manifest.get("raw_demo_exports", []) if isinstance(manifest, dict) else []
+    solver_exports = manifest.get("solver_exports", []) if isinstance(manifest, dict) else []
+    raw_demo_generated = bool(raw_demo_exports) and all(Path(export.get("output_path", "")).exists() for export in raw_demo_exports if isinstance(export, dict))
     generated = {
-        "raw_json": freshness["raw_exports_fresh"],
+        "raw_json": raw_demo_generated or freshness["raw_exports_fresh"],
+        "raw_demo_json": raw_demo_generated,
+        "solver_json": bool(solver_exports) and freshness["raw_exports_fresh"],
         "solvable_json": freshness["solvable_exports_fresh"],
+        "solver_solvable_json": freshness["solvable_exports_fresh"],
         "pyg_json": freshness["pyg_exports_fresh"],
+        "solver_pyg_json": freshness["pyg_exports_fresh"],
         "scenarios": freshness["scenario_artifacts_fresh"],
     }
     present_count = sum(1 for value in exists.values() if value)
@@ -152,7 +164,7 @@ def _handoff_artifact_summary() -> dict[str, Any]:
         status = "warning" if present_count else "not_run"
     return {
         "status": status,
-        "paths": HANDOFF_ARTIFACT_PATHS,
+        "paths": paths,
         "exists": exists,
         "generated": generated,
         "freshness": freshness,
@@ -165,6 +177,27 @@ def _handoff_artifact_summary() -> dict[str, Any]:
             "after DC warm-start because the synthetic/demo grid is not yet AC-feasible."
         ),
     }
+
+
+def _handoff_paths_from_manifest(manifest: dict[str, Any]) -> dict[str, str]:
+    raw_exports = [export for export in manifest.get("raw_demo_exports") or manifest.get("exports") or [] if isinstance(export, dict)]
+    solver_exports = [export for export in manifest.get("solver_exports") or manifest.get("exports") or [] if isinstance(export, dict)]
+    raw_path = Path(raw_exports[0]["output_path"]) if raw_exports else Path(HANDOFF_ARTIFACT_PATHS["raw_json"])
+    solver_path = Path(solver_exports[0]["output_path"]) if solver_exports else raw_path
+    return {
+        "raw_json": str(raw_path),
+        "raw_demo_json": str(raw_path),
+        "solver_json": str(solver_path),
+        "solvable_json": str(_artifact_path(solver_path, "solvable")),
+        "solver_solvable_json": str(_artifact_path(solver_path, "solvable")),
+        "pyg_json": str(_artifact_path(solver_path, "pyg")),
+        "solver_pyg_json": str(_artifact_path(solver_path, "pyg")),
+        "scenarios": "data/processed/scenarios",
+    }
+
+
+def _artifact_path(raw_path: Path, kind: str) -> Path:
+    return raw_path.with_name(f"{raw_path.stem}.{kind}.json")
 
 
 def _handoff_freshness_from_report(report: dict[str, Any] | None) -> dict[str, Any]:
@@ -210,6 +243,33 @@ def _latest_manifest_export_summary(manifest: Any) -> dict[str, Any] | None:
         "output_path": output_path,
         "output_exists": output_exists,
         "demand_snapshot": latest.get("demand_snapshot") or metadata.get("demand_snapshot"),
+        "bus_count": metadata.get("bus_count"),
+        "branch_count": metadata.get("branch_count"),
+        "load_count": metadata.get("load_count"),
+        "gen_count": metadata.get("gen_count"),
+        "total_pd_mw": metadata.get("total_pd_mw"),
+        "total_pmax_mw": metadata.get("total_pmax_mw"),
+    }
+
+
+def _latest_solver_export_summary(manifest: Any) -> dict[str, Any] | None:
+    if not isinstance(manifest, dict):
+        return None
+    exports = manifest.get("solver_exports")
+    if not isinstance(exports, list) or not exports:
+        return None
+    latest = exports[-1]
+    if not isinstance(latest, dict):
+        return None
+    metadata = latest.get("metadata") if isinstance(latest.get("metadata"), dict) else {}
+    output_path = latest.get("output_path")
+    output_exists = Path(output_path).exists() if isinstance(output_path, str) else False
+    return {
+        "status": "generated" if output_exists else "missing_output",
+        "output_path": output_path,
+        "output_exists": output_exists,
+        "solver_sanitized": latest.get("solver_sanitized") or metadata.get("solver_sanitized"),
+        "solver_sanitization_summary": latest.get("solver_sanitization_summary") or metadata.get("solver_sanitization_summary"),
         "bus_count": metadata.get("bus_count"),
         "branch_count": metadata.get("branch_count"),
         "load_count": metadata.get("load_count"),
@@ -337,6 +397,8 @@ def _pipeline_summary_payload(
         "handoff_artifact_status": {
             "status": handoff_artifacts["status"],
             "raw_powermodels_export_generated": handoff_artifacts["generated"]["raw_json"],
+            "raw_demo_powermodels_export_generated": handoff_artifacts["generated"]["raw_demo_json"],
+            "solver_powermodels_export_generated": handoff_artifacts["generated"]["solver_json"],
             "gridsfm_relaxed_solvable_json_generated": handoff_artifacts["generated"]["solvable_json"],
             "pyg_export_generated": handoff_artifacts["generated"]["pyg_json"],
             "scenario_files_generated": handoff_artifacts["generated"]["scenarios"],
@@ -345,7 +407,10 @@ def _pipeline_summary_payload(
             "manifest_path": handoff_artifacts["manifest_path"],
             "manifest_exists": handoff_artifacts["manifest_exists"],
             "manifest_export_count": len(handoff_artifacts["manifest"].get("exports", [])) if isinstance(handoff_artifacts.get("manifest"), dict) else 0,
+            "manifest_raw_demo_export_count": len(handoff_artifacts["manifest"].get("raw_demo_exports", [])) if isinstance(handoff_artifacts.get("manifest"), dict) else 0,
+            "manifest_solver_export_count": len(handoff_artifacts["manifest"].get("solver_exports", [])) if isinstance(handoff_artifacts.get("manifest"), dict) else 0,
             "latest_raw_powermodels_export": _latest_manifest_export_summary(handoff_artifacts.get("manifest")),
+            "latest_solver_powermodels_export": _latest_solver_export_summary(handoff_artifacts.get("manifest")),
             "feasibility_warning": handoff_artifacts["feasibility_warning"],
         },
     }

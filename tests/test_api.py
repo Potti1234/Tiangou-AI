@@ -243,7 +243,16 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert baseline_payload["system_summary"]["top_10_risky_buses"][0]["risk_score"] >= 0
     assert baseline_payload["system_summary"]["top_10_risky_buses"][0]["reasons"]
     assert summary_payload["handoff_artifacts"]["pyg_json"].endswith(".pyg.json")
-    assert set(summary_payload["handoff_artifact_exists"]) == {"raw_json", "solvable_json", "pyg_json", "scenarios"}
+    assert set(summary_payload["handoff_artifact_exists"]) == {
+        "raw_json",
+        "raw_demo_json",
+        "solver_json",
+        "solvable_json",
+        "solver_solvable_json",
+        "pyg_json",
+        "solver_pyg_json",
+        "scenarios",
+    }
     analytics_payload = analytics_response.json()
     assert analytics_payload["schema"] == "tiangou.grid.analytics_dashboard.v1"
     assert set(analytics_payload["metadata_cards"]) >= {
@@ -270,6 +279,8 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert {"peak_16h", "overnight_04h"} <= {row["snapshot"] for row in analytics_payload["charts"]["demand_snapshots"]}
     assert analytics_payload["transparency"]["assumption_summary"]["provenance_counts"] == analytics_payload["metadata_cards"]["observed_inferred_synthetic_row_counts"]
     assert analytics_payload["solver_artifacts"]["raw_powermodels_export_generated"] in {True, False}
+    assert analytics_payload["solver_artifacts"]["raw_demo_powermodels_export_generated"] in {True, False}
+    assert analytics_payload["solver_artifacts"]["solver_powermodels_export_generated"] in {True, False}
     assert set(analytics_payload["solver_artifacts"]["freshness"]) >= {
         "raw_exports_fresh",
         "solvable_exports_fresh",
@@ -284,6 +295,15 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
         "output_path",
         "output_exists",
         "demand_snapshot",
+        "bus_count",
+        "branch_count",
+    }
+    assert analytics_payload["solver_artifacts"]["latest_solver_powermodels_export"] is None or set(analytics_payload["solver_artifacts"]["latest_solver_powermodels_export"]) >= {
+        "status",
+        "output_path",
+        "output_exists",
+        "solver_sanitized",
+        "solver_sanitization_summary",
         "bus_count",
         "branch_count",
     }

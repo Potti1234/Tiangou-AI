@@ -338,12 +338,16 @@ type AnalyticsDashboardPayload = {
   solver_artifacts: {
     status: StageStatus
     raw_powermodels_export_generated: boolean
+    raw_demo_powermodels_export_generated: boolean
+    solver_powermodels_export_generated: boolean
     gridsfm_relaxed_solvable_json_generated: boolean
     pyg_export_generated: boolean
     scenario_files_generated: boolean
     manifest_path: string
     manifest_exists: boolean
     manifest_export_count: number
+    manifest_raw_demo_export_count: number
+    manifest_solver_export_count: number
     freshness: {
       raw_exports_fresh: boolean
       solvable_exports_fresh: boolean
@@ -362,6 +366,19 @@ type AnalyticsDashboardPayload = {
       output_path: string | null
       output_exists: boolean
       demand_snapshot: string | null
+      bus_count: number | null
+      branch_count: number | null
+      load_count?: number | null
+      gen_count?: number | null
+      total_pd_mw?: number | null
+      total_pmax_mw?: number | null
+    } | null
+    latest_solver_powermodels_export: {
+      status: string
+      output_path: string | null
+      output_exists: boolean
+      solver_sanitized?: boolean | null
+      solver_sanitization_summary?: { action_count?: number; action_counts?: Record<string, number> } | null
       bus_count: number | null
       branch_count: number | null
       load_count?: number | null
@@ -948,12 +965,14 @@ function AnalyticsDashboardTabs({ analytics }: { analytics: AnalyticsDashboardPa
     label: `${row.energy_source} ${row.resource_type}`.replaceAll("_", " "),
   }))
   const artifactRows: Array<[string, boolean, string]> = [
-    ["Raw PowerModels export", analytics.solver_artifacts.raw_powermodels_export_generated, "fresh"],
-    ["GridSFM relaxed/solvable JSON", analytics.solver_artifacts.gridsfm_relaxed_solvable_json_generated, "fresh"],
-    ["PyG export", analytics.solver_artifacts.pyg_export_generated, "fresh"],
+    ["Raw demo PowerModels", analytics.solver_artifacts.raw_demo_powermodels_export_generated, "present"],
+    ["Solver-grade PowerModels", analytics.solver_artifacts.solver_powermodels_export_generated, "fresh"],
+    ["Solver-grade solvable JSON", analytics.solver_artifacts.gridsfm_relaxed_solvable_json_generated, "fresh"],
+    ["Solver-grade PyG export", analytics.solver_artifacts.pyg_export_generated, "fresh"],
     ["Scenario files", analytics.solver_artifacts.scenario_files_generated, "fresh"],
   ]
   const latestExport = analytics.solver_artifacts.latest_raw_powermodels_export
+  const latestSolverExport = analytics.solver_artifacts.latest_solver_powermodels_export
   const staleCodes = analytics.solver_artifacts.freshness.stale_codes
   const modelParameters = analytics.model_parameters
 
@@ -1079,6 +1098,20 @@ function AnalyticsDashboardTabs({ analytics }: { analytics: AnalyticsDashboardPa
                   <p className="mt-1 truncate font-mono text-[11px] text-zinc-500">{latestExport.output_path ?? "No output path in manifest"}</p>
                   <p className="mt-1 text-zinc-600">
                     {latestExport.demand_snapshot ?? "unknown snapshot"}, {formatNumber(latestExport.bus_count)} buses, {formatNumber(latestExport.branch_count)} branches
+                  </p>
+                </div>
+              )}
+              {latestSolverExport && (
+                <div className="rounded-[4px] border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-zinc-700">Latest solver-grade PowerModels export</span>
+                    <Badge variant="outline" className={cn("rounded-[3px]", latestSolverExport.output_exists ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-amber-300 bg-amber-50 text-amber-900")}>
+                      {latestSolverExport.status.replaceAll("_", " ")}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 truncate font-mono text-[11px] text-zinc-500">{latestSolverExport.output_path ?? "No output path in manifest"}</p>
+                  <p className="mt-1 text-zinc-600">
+                    {formatNumber(latestSolverExport.bus_count)} buses, {formatNumber(latestSolverExport.branch_count)} branches, {formatNumber(latestSolverExport.solver_sanitization_summary?.action_count ?? 0)} sanitization actions
                   </p>
                 </div>
               )}
