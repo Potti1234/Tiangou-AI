@@ -302,7 +302,11 @@ def _branch_defaults(power: str, voltage_kv: float | None) -> dict[str, Any]:
     return defaults
 
 
-def _classify_preview_branch(from_bus_id: str | None, to_bus_id: str | None) -> str:
+def _classify_preview_branch(
+    from_bus_id: str | None,
+    to_bus_id: str | None,
+    bus_by_id: Mapping[str, Mapping[str, Any]] | None = None,
+) -> str:
     if from_bus_id is None or to_bus_id is None:
         return "isolated"
     if from_bus_id == to_bus_id:
@@ -311,6 +315,11 @@ def _classify_preview_branch(from_bus_id: str | None, to_bus_id: str | None) -> 
         return "isolated"
     if from_bus_id.startswith("synthetic:") or to_bus_id.startswith("synthetic:"):
         return "tap"
+    if bus_by_id is not None:
+        from_facility = bus_by_id.get(from_bus_id, {}).get("facility_id")
+        to_facility = bus_by_id.get(to_bus_id, {}).get("facility_id")
+        if from_facility and from_facility == to_facility:
+            return "loop"
     return "inter_facility"
 
 
@@ -674,7 +683,8 @@ def build_topology_preview(
         defaults = _branch_defaults(record["power"], voltage_kv)
         length_km = _geometry_length_km(geometry)
         circuit_candidates = split_voltage_circuits(_circuit_tags(record))
-        circuit_class = _classify_preview_branch(endpoint_bus_ids[0], endpoint_bus_ids[1])
+        bus_by_id_for_class = {bus["id"]: bus for bus in [*buses, *synthetic_buses.values()]}
+        circuit_class = _classify_preview_branch(endpoint_bus_ids[0], endpoint_bus_ids[1], bus_by_id_for_class)
         branches.append(
             {
                 "id": f"osm:{record['osm_type']}:{record['osm_id']}",

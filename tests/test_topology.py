@@ -1,4 +1,5 @@
 from app.topology import (
+    _classify_preview_branch,
     build_powermodels_preview,
     build_topology_preview,
     normalize_voltage,
@@ -37,6 +38,18 @@ def test_split_voltage_circuits_splits_multi_voltage_corridors() -> None:
     assert split_voltage_circuits({"voltage": "132000", "cables": "6"}) == [
         {"voltage_kv": 132.0, "circuit_count": 2, "count_source": "cables_div_3"},
     ]
+
+
+def test_classify_preview_branch_detects_same_facility_loops() -> None:
+    bus_by_id = {
+        "hub:400": {"facility_id": "hub"},
+        "hub:132": {"facility_id": "hub"},
+        "remote:132": {"facility_id": "remote"},
+    }
+
+    assert _classify_preview_branch("hub:400", "hub:132", bus_by_id) == "loop"
+    assert _classify_preview_branch("hub:132", "remote:132", bus_by_id) == "inter_facility"
+    assert _classify_preview_branch("hub:132", "synthetic:way:1:0", bus_by_id) == "tap"
 
 
 def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
