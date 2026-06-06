@@ -134,5 +134,6 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert filtered_response.json()["_metadata"]["min_voltage_kv"] == 100.0
     assert intertie_validation_response.json()["metrics"]["island_count"] == 1
     validation_payload = validation_response.json()
-    assert validation_payload["status"] == "ok"
+    assert validation_payload["status"] == "warning"
+    assert "severe_branch_voltage_mismatch" in {warning["code"] for warning in validation_payload["warnings"]}
     assert validation_payload["metrics"]["low_confidence_counts"]["load"] == 2

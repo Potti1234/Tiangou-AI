@@ -660,6 +660,19 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
     island_report = _case_island_report(buses, branches, loads, generators)
     quality_metrics = _case_quality_metrics(buses, branches, loads, generators)
     voltage_mismatches = _branch_voltage_mismatches(buses, branches)
+    severe_voltage_mismatches = [
+        mismatch
+        for mismatch in voltage_mismatches
+        if any(endpoint["relative_difference"] >= 0.5 for endpoint in mismatch["endpoints"])
+    ]
+    if severe_voltage_mismatches:
+        warnings.append(
+            {
+                "code": "severe_branch_voltage_mismatch",
+                "message": "One or more branches connect to buses with voltage classes far from the inferred branch voltage.",
+                "count": len(severe_voltage_mismatches),
+            }
+        )
     for island in island_report["islands"]:
         if island["gen_count"] > 0 and island["reference_bus_count"] == 0:
             errors.append(
@@ -713,6 +726,7 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
             "low_confidence_counts": quality_metrics["low_confidence_counts"],
             "provenance_summary": quality_metrics["provenance_summary"],
             "branch_voltage_mismatch_count": len(voltage_mismatches),
+            "severe_branch_voltage_mismatch_count": len(severe_voltage_mismatches),
         },
         "islands": island_report["islands"],
         "voltage_mismatches": voltage_mismatches,
@@ -830,6 +844,7 @@ def _branch_voltage_mismatches(
                         "endpoint": endpoint_field,
                         "bus_i": bus["bus_i"],
                         "bus_base_kv": bus_voltage,
+                        "relative_difference": round(abs(float(bus_voltage) - float(branch_voltage)) / float(branch_voltage), 6),
                     }
                 )
         if mismatched_endpoints:

@@ -70,7 +70,7 @@ Run structural validation before solver handoff:
 Invoke-RestMethod http://127.0.0.1:8000/grid/topology/validation
 ```
 
-Validation returns structural errors separately from research-model quality metrics such as `low_confidence_counts`, `provenance_summary`, and branch-to-bus voltage mismatch diagnostics.
+Validation returns structural errors separately from research-model quality metrics such as `low_confidence_counts`, `provenance_summary`, and branch-to-bus voltage mismatch diagnostics. Severe branch voltage mismatches are surfaced as warnings before solver handoff.
 
 Write the preview to a file for the downstream Julia solver pipeline:
 

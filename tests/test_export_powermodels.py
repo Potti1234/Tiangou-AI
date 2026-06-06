@@ -19,7 +19,8 @@ def test_export_powermodels_case_writes_json(tmp_path) -> None:
         snap_tolerance_km=0.2,
     )
 
-    assert result["validation"]["status"] == "ok"
+    assert result["validation"]["status"] == "warning"
+    assert "severe_branch_voltage_mismatch" in {warning["code"] for warning in result["validation"]["warnings"]}
     assert result["metadata"]["branch_count"] == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["baseMVA"] == 100.0
@@ -126,7 +127,7 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     ]
     assert manifest["solver_handoff"]["grids_solvable_path"] == str(grids_solvable_path)
     assert manifest["solver_handoff"]["n_per_mode"] == 3
-    assert manifest["exports"][0]["validation"]["status"] == "ok"
+    assert manifest["exports"][0]["validation"]["status"] == "warning"
 
 
 def test_export_hong_kong_phase1_bundle_writes_intertie_derate_stress_cases(tmp_path) -> None:

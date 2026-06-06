@@ -244,7 +244,8 @@ def test_powermodels_preview_can_include_hk_intertie() -> None:
     assert exported_intertie["parameter_source"] == "public_interconnection_capacity_equivalent"
     assert exported_intertie["confidence"] == 0.5
     assert case["_metadata"]["provenance_summary"]["branch"]["public_interconnection_capacity_equivalent"] == 1
-    assert validation["status"] == "ok"
+    assert validation["status"] == "warning"
+    assert "severe_branch_voltage_mismatch" in {warning["code"] for warning in validation["warnings"]}
     assert validation["metrics"]["island_count"] == 1
 
 
@@ -293,11 +294,12 @@ def test_powermodels_validation_reports_islands_and_capacity() -> None:
 
     validation = validate_powermodels_case(case)
 
-    assert validation["status"] == "ok"
+    assert validation["status"] == "warning"
     assert validation["metrics"]["island_count"] == 2
     assert validation["metrics"]["total_pd_mw"] == 9591.0
     assert validation["metrics"]["low_confidence_counts"] == {"branch": 0, "bus": 2, "gen": 2, "load": 4}
     assert validation["metrics"]["branch_voltage_mismatch_count"] == 1
+    assert validation["metrics"]["severe_branch_voltage_mismatch_count"] == 1
     assert validation["metrics"]["provenance_summary"]["load"] == {
         "public_peak_demand_scaled_voltage_weighted_substation_split": 4
     }
@@ -311,11 +313,13 @@ def test_powermodels_validation_reports_islands_and_capacity() -> None:
                     "endpoint": "t_bus",
                     "bus_i": 2,
                     "bus_base_kv": 132.0,
+                    "relative_difference": 0.67,
                 }
             ],
         }
     ]
     assert validation["errors"] == []
+    assert "severe_branch_voltage_mismatch" in {warning["code"] for warning in validation["warnings"]}
     assert all(island["reference_bus_count"] == 1 for island in validation["islands"])
 
 
