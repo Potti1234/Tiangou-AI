@@ -26,6 +26,7 @@ HK_PEAK_DEMAND_MW = {
     "clp": 7336.0,
     "hk-electric": 2255.0,
 }
+BASE_MVA = 100.0
 
 VOLTAGE_DEFAULTS = {
     "line": {
@@ -313,6 +314,234 @@ def build_topology_preview(
         "loads": load_allocations,
         "quality": _quality_summary(records, buses, branches),
     }
+
+
+def build_powermodels_preview(
+    rows: Iterable[Any],
+    *,
+    snap_tolerance_km: float = 0.75,
+) -> dict[str, Any]:
+    topology = build_topology_preview(rows, snap_tolerance_km=snap_tolerance_km)
+    return topology_preview_to_powermodels(topology)
+
+
+def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, Any]:
+    buses = list(topology["buses"])
+    branches = [
+        branch
+        for branch in topology["branches"]
+        if branch.get("from_bus_id") and branch.get("to_bus_id") and branch.get("from_bus_id") != branch.get("to_bus_id")
+    ]
+    loads = list(topology["loads"])
+
+    bus_id_map = {bus["id"]: str(index) for index, bus in enumerate(buses, start=1)}
+    gen_bus_ids = set(_equivalent_generator_buses(buses, loads))
+    load_bus_ids = {load["bus_id"] for load in loads}
+    reference_bus_id = _reference_bus_id(buses, gen_bus_ids)
+
+    bus_dict = {}
+    for bus in buses:
+        bus_number = bus_id_map[bus["id"]]
+        bus_dict[bus_number] = {
+            "bus_i": int(bus_number),
+            "type": _powermodels_bus_type(bus["id"], reference_bus_id, gen_bus_ids, load_bus_ids),
+            "base_kv": bus.get("base_kv") or 132.0,
+            "vmin": 0.9,
+            "vmax": 1.1,
+            "vm": 1.0,
+            "va": 0.0,
+            "zone": 1,
+            "source_id": bus["id"],
+        }
+
+    branch_dict = {}
+    for index, branch in enumerate(branches, start=1):
+        branch_dict[str(index)] = _powermodels_branch(index, branch, bus_id_map)
+
+    load_dict = {}
+    for index, load in enumerate(loads, start=1):
+        load_dict[str(index)] = {
+            "index": index,
+            "load_bus": int(bus_id_map[load["bus_id"]]),
+            "pd": round(load["pd_mw"] / BASE_MVA, 6),
+            "qd": round(load["qd_mvar"] / BASE_MVA, 6),
+            "status": 1,
+            "source_id": load["id"],
+        }
+
+    gen_dict = {}
+    for index, generator in enumerate(_equivalent_generators(buses, loads), start=1):
+        gen_dict[str(index)] = {
+            "index": index,
+            "gen_bus": int(bus_id_map[generator["bus_id"]]),
+            "pg": 0.0,
+            "qg": 0.0,
+            "pmax": round(generator["pmax_mw"] / BASE_MVA, 6),
+            "pmin": 0.0,
+            "qmax": round(generator["pmax_mw"] * 0.6 / BASE_MVA, 6),
+            "qmin": round(-generator["pmax_mw"] * 0.6 / BASE_MVA, 6),
+            "vg": 1.0,
+            "mbase": BASE_MVA,
+            "gen_status": 1,
+            "model": 2,
+            "ncost": 3,
+            "cost": generator["cost"],
+            "source_id": generator["id"],
+        }
+
+    return {
+        "name": "hong_kong_osm_preview",
+        "source_version": "tiangou.powermodels_preview.v1",
+        "baseMVA": BASE_MVA,
+        "per_unit": True,
+        "bus": bus_dict,
+        "branch": branch_dict,
+        "gen": gen_dict,
+        "load": load_dict,
+        "shunt": {},
+        "storage": {},
+        "switch": {},
+        "dcline": {},
+        "_metadata": {
+            "topology_schema": topology["metadata"]["schema"],
+            "bus_count": len(bus_dict),
+            "branch_count": len(branch_dict),
+            "load_count": len(load_dict),
+            "gen_count": len(gen_dict),
+            "total_pd_mw": round(sum(load["pd_mw"] for load in loads), 3),
+            "total_equivalent_pmax_mw": round(sum(gen["pmax_mw"] for gen in _equivalent_generators(buses, loads)), 3),
+            "notes": [
+                "This is a PowerModels handoff preview built from public OSM topology and inferred parameters.",
+                "Equivalent generators represent territory-level local supply or imports; run relaxation and validation before optimization.",
+            ],
+        },
+    }
+
+
+def _powermodels_bus_type(
+    bus_id: str,
+    reference_bus_id: str | None,
+    gen_bus_ids: set[str],
+    load_bus_ids: set[str],
+) -> int:
+    if bus_id == reference_bus_id:
+        return 3
+    if bus_id in gen_bus_ids:
+        return 2
+    if bus_id in load_bus_ids:
+        return 1
+    return 1
+
+
+def _reference_bus_id(buses: list[dict[str, Any]], gen_bus_ids: set[str]) -> str | None:
+    candidates = [bus for bus in buses if bus["id"] in gen_bus_ids]
+    if not candidates:
+        candidates = buses
+    if not candidates:
+        return None
+    return max(candidates, key=lambda bus: bus.get("base_kv") or 0.0)["id"]
+
+
+def _powermodels_branch(
+    index: int,
+    branch: Mapping[str, Any],
+    bus_id_map: Mapping[str, str],
+) -> dict[str, Any]:
+    voltage_kv = branch.get("voltage_kv") or 132.0
+    length_km = branch.get("length_km") or 1.0
+    defaults = branch.get("parameter_defaults") or {}
+    r_ohm = (defaults.get("r_ohm_per_km") or 0.08) * length_km
+    x_ohm = (defaults.get("x_ohm_per_km") or 0.42) * length_km
+    z_base_ohm = (voltage_kv * voltage_kv) / BASE_MVA
+
+    return {
+        "index": index,
+        "f_bus": int(bus_id_map[str(branch["from_bus_id"])]),
+        "t_bus": int(bus_id_map[str(branch["to_bus_id"])]),
+        "br_r": round(max(r_ohm / z_base_ohm, 0.00001), 8),
+        "br_x": round(max(x_ohm / z_base_ohm, 0.00001), 8),
+        "b_fr": 0.0,
+        "b_to": 0.0,
+        "rate_a": defaults.get("rate_mva") or 100.0,
+        "rate_b": defaults.get("rate_mva") or 100.0,
+        "rate_c": defaults.get("rate_mva") or 100.0,
+        "tap": 1.0,
+        "shift": 0.0,
+        "br_status": 1,
+        "angmin": -0.523599,
+        "angmax": 0.523599,
+        "transformer": False,
+        "source_id": branch["id"],
+    }
+
+
+def _equivalent_generator_buses(
+    buses: list[dict[str, Any]],
+    loads: list[dict[str, Any]],
+) -> list[str]:
+    return [generator["bus_id"] for generator in _equivalent_generators(buses, loads)]
+
+
+def _equivalent_generators(
+    buses: list[dict[str, Any]],
+    loads: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    loads_by_territory: dict[str, float] = {}
+    for load in loads:
+        territory = load["service_territory"]
+        loads_by_territory[territory] = loads_by_territory.get(territory, 0.0) + load["pd_mw"]
+
+    generators = []
+    for territory, pd_mw in sorted(loads_by_territory.items()):
+        bus = _best_generator_bus(buses, territory)
+        if bus is None:
+            continue
+        pmax_mw = max(pd_mw * 1.25, 100.0)
+        generators.append(
+            {
+                "id": f"equivalent_gen:{territory}",
+                "bus_id": bus["id"],
+                "service_territory": territory,
+                "pmax_mw": pmax_mw,
+                "cost": [0.01, 20.0 if territory == "clp" else 24.0, 0.0],
+            }
+        )
+
+    if not generators and buses:
+        bus = max(buses, key=lambda candidate: candidate.get("base_kv") or 0.0)
+        generators.append(
+            {
+                "id": "equivalent_gen:unassigned",
+                "bus_id": bus["id"],
+                "service_territory": "unassigned",
+                "pmax_mw": 100.0,
+                "cost": [0.01, 30.0, 0.0],
+            }
+        )
+    return generators
+
+
+def _best_generator_bus(
+    buses: list[dict[str, Any]],
+    territory: str,
+) -> dict[str, Any] | None:
+    candidates = [
+        bus
+        for bus in buses
+        if bus.get("service_territory") == territory
+        and bus.get("voltage_band") in {"extra_high_voltage", "high_voltage", "subtransmission"}
+    ]
+    if not candidates:
+        candidates = [
+            bus
+            for bus in buses
+            if bus.get("voltage_band") in {"extra_high_voltage", "high_voltage", "subtransmission"}
+        ]
+    if not candidates:
+        candidates = buses
+    if not candidates:
+        return None
+    return max(candidates, key=lambda bus: bus.get("base_kv") or 0.0)
 
 
 def _allocate_peak_loads(buses: list[dict[str, Any]]) -> list[dict[str, Any]]:

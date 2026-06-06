@@ -1,4 +1,4 @@
-from app.topology import build_topology_preview, normalize_voltage
+from app.topology import build_powermodels_preview, build_topology_preview, normalize_voltage
 
 
 def test_normalize_voltage_accepts_common_osm_formats() -> None:
@@ -8,6 +8,46 @@ def test_normalize_voltage_accepts_common_osm_formats() -> None:
 
 
 def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
+    rows = _sample_rows()
+
+    preview = build_topology_preview(rows, snap_tolerance_km=0.2)
+
+    assert preview["metadata"]["bus_count"] == 4
+    assert preview["metadata"]["branch_count"] == 2
+    assert preview["metadata"]["load_count"] == 4
+    assert preview["quality"]["synthetic_bus_count"] == 2
+
+    snapped_branch = next(branch for branch in preview["branches"] if branch["id"] == "osm:way:10")
+    assert snapped_branch["from_bus_id"] == "osm:node:1"
+    assert snapped_branch["to_bus_id"] == "osm:node:2"
+    assert snapped_branch["endpoint_quality"][0]["snap"] == "matched"
+    assert snapped_branch["parameter_defaults"]["matched_voltage_kv"] == 400.0
+
+    synthetic_branch = next(branch for branch in preview["branches"] if branch["id"] == "osm:way:11")
+    assert synthetic_branch["endpoint_quality"][0]["snap"] == "synthetic"
+    assert synthetic_branch["parameter_defaults"]["matched_voltage_kv"] == 132.0
+
+    territories = {load["service_territory"] for load in preview["loads"]}
+    assert territories == {"clp", "hk-electric"}
+
+
+def test_powermodels_preview_exports_solver_handoff_shape() -> None:
+    case = build_powermodels_preview(_sample_rows(), snap_tolerance_km=0.2)
+
+    assert case["baseMVA"] == 100.0
+    assert set(case) >= {"bus", "branch", "gen", "load", "shunt"}
+    assert case["_metadata"]["total_pd_mw"] == 9591.0
+    assert case["_metadata"]["gen_count"] == 2
+
+    assert sorted(case["bus"]) == ["1", "2", "3", "4"]
+    assert any(bus["type"] == 3 for bus in case["bus"].values())
+    assert all(branch["br_r"] > 0 for branch in case["branch"].values())
+    assert all(branch["br_x"] > 0 for branch in case["branch"].values())
+    assert sum(load["pd"] for load in case["load"].values()) == 95.91
+    assert sum(gen["pmax"] for gen in case["gen"].values()) > 95.91
+
+
+def _sample_rows() -> list[dict[str, object]]:
     rows = [
         {
             "osm_type": "node",
@@ -84,23 +124,4 @@ def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
             "updated_at": "2026-01-01 00:00:00",
         },
     ]
-
-    preview = build_topology_preview(rows, snap_tolerance_km=0.2)
-
-    assert preview["metadata"]["bus_count"] == 4
-    assert preview["metadata"]["branch_count"] == 2
-    assert preview["metadata"]["load_count"] == 4
-    assert preview["quality"]["synthetic_bus_count"] == 2
-
-    snapped_branch = next(branch for branch in preview["branches"] if branch["id"] == "osm:way:10")
-    assert snapped_branch["from_bus_id"] == "osm:node:1"
-    assert snapped_branch["to_bus_id"] == "osm:node:2"
-    assert snapped_branch["endpoint_quality"][0]["snap"] == "matched"
-    assert snapped_branch["parameter_defaults"]["matched_voltage_kv"] == 400.0
-
-    synthetic_branch = next(branch for branch in preview["branches"] if branch["id"] == "osm:way:11")
-    assert synthetic_branch["endpoint_quality"][0]["snap"] == "synthetic"
-    assert synthetic_branch["parameter_defaults"]["matched_voltage_kv"] == 132.0
-
-    territories = {load["service_territory"] for load in preview["loads"]}
-    assert territories == {"clp", "hk-electric"}
+    return rows

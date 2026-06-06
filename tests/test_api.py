@@ -45,3 +45,65 @@ def test_ingest_endpoint_stores_mocked_overpass_elements(tmp_path, monkeypatch) 
     assert assets_response.json()[0]["name"] == "Mock Substation"
     assert detail_response.status_code == 200
     assert detail_response.json()["tags"]["power"] == "substation"
+
+
+def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", tmp_path / "api.sqlite3")
+
+    async def fake_fetch(self, query: str):
+        return {
+            "elements": [
+                {
+                    "type": "node",
+                    "id": 1,
+                    "lat": 22.30,
+                    "lon": 114.10,
+                    "tags": {
+                        "power": "substation",
+                        "name": "CLP Alpha",
+                        "operator": "CLP Power",
+                        "voltage": "400000",
+                    },
+                },
+                {
+                    "type": "node",
+                    "id": 2,
+                    "lat": 22.31,
+                    "lon": 114.11,
+                    "tags": {
+                        "power": "substation",
+                        "name": "CLP Beta",
+                        "operator": "CLP Power",
+                        "voltage": "132000",
+                    },
+                },
+                {
+                    "type": "way",
+                    "id": 10,
+                    "tags": {
+                        "power": "line",
+                        "name": "Alpha Beta",
+                        "operator": "CLP Power",
+                        "voltage": "400000",
+                    },
+                    "geometry": [
+                        {"lat": 22.3001, "lon": 114.1001},
+                        {"lat": 22.3101, "lon": 114.1101},
+                    ],
+                },
+            ]
+        }
+
+    monkeypatch.setattr(main.OverpassClient, "fetch", fake_fetch)
+
+    with TestClient(main.app) as client:
+        ingest_response = client.post("/ingest/hong-kong")
+        preview_response = client.get("/grid/topology/powermodels-preview")
+
+    assert ingest_response.status_code == 200
+    assert preview_response.status_code == 200
+    payload = preview_response.json()
+    assert payload["baseMVA"] == 100.0
+    assert payload["_metadata"]["branch_count"] == 1
+    assert payload["_metadata"]["load_count"] == 2
+    assert payload["_metadata"]["gen_count"] == 1

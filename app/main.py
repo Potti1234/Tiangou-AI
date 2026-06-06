@@ -17,7 +17,7 @@ from app.repository import (
     summarize,
     upsert_elements,
 )
-from app.topology import build_topology_preview
+from app.topology import build_powermodels_preview, build_topology_preview
 
 
 @asynccontextmanager
@@ -186,3 +186,22 @@ def topology_preview(
             limit=100000,
         )
     return build_topology_preview(rows, snap_tolerance_km=snap_tolerance_km)
+
+
+@app.get("/grid/topology/powermodels-preview")
+def powermodels_preview(
+    region_key: str = "hong-kong",
+    snap_tolerance_km: float = Query(default=0.75, ge=0.0, le=10.0),
+) -> dict[str, Any]:
+    try:
+        get_region(region_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    with get_db() as conn:
+        rows = list_elements(
+            conn,
+            region_key=region_key,
+            limit=100000,
+        )
+    return build_powermodels_preview(rows, snap_tolerance_km=snap_tolerance_km)

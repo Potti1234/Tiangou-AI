@@ -35,3 +35,19 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/ingest/greater-bay-area
 ```
 
 The backend uses raw Overpass QL. The `{{geocodeArea:...}}` macro works in Overpass Turbo, but raw API clients need ordinary Overpass area selectors instead.
+
+## Build a Topology Preview
+
+After ingesting a region, inspect the inferred bus-branch model:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/grid/topology/preview
+```
+
+Generate a first PowerModels-style solver handoff JSON:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/grid/topology/powermodels-preview
+```
+
+This preview uses OSM geometry, voltage-class impedance defaults, public Hong Kong peak-demand anchors, and territory-level equivalent generators. Treat it as an upstream topology-builder artifact for the Julia relaxation/export pipeline, not as an operational grid model.
