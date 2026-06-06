@@ -149,11 +149,10 @@ function routeCoordinates(asset: GridAsset): [number, number][] {
 function MarkerDot({ asset, selected }: { asset: GridAsset; selected: boolean }) {
   const style = styleFor(asset.power)
   const Icon = style.icon
-  const named = Boolean(asset.name || asset.tags["name:en"])
   const compact = asset.power === "tower" || asset.power === "pole"
 
   return (
-    <div className="relative flex items-center gap-1.5">
+    <div className="relative">
       <div
         className={cn(
           "grid place-items-center rounded-full border border-zinc-950/70 shadow-sm transition active:scale-95",
@@ -164,11 +163,6 @@ function MarkerDot({ asset, selected }: { asset: GridAsset; selected: boolean })
       >
         {!compact && <Icon className="size-3 text-white" strokeWidth={2} />}
       </div>
-      {named && !compact && (
-        <span className="max-w-44 rounded-[2px] bg-white/88 px-1.5 py-0.5 text-[12px] font-medium leading-tight text-zinc-800 shadow-sm">
-          {assetTitle(asset)}
-        </span>
-      )}
     </div>
   )
 }
