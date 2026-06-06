@@ -50,6 +50,7 @@ def test_frontend_fetches_and_renders_assumption_transparency() -> None:
 def test_frontend_uses_shadcn_charts_for_analytics_dashboard() -> None:
     source = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
     chart_source = Path("frontend/src/components/ui/chart.tsx").read_text(encoding="utf-8")
+    main_source = Path("frontend/src/main.tsx").read_text(encoding="utf-8")
 
     assert "ChartContainer" in source
     assert "ChartTooltip" in source
@@ -57,6 +58,11 @@ def test_frontend_uses_shadcn_charts_for_analytics_dashboard() -> None:
     assert "ChartLegend" in source
     assert "ChartLegendContent" in source
     assert "/grid/analytics-dashboard" in source
+    assert "createRouter" in main_source
+    assert "path: '/analytics'" in main_source
+    assert "component: AnalyticsPage" in main_source
+    assert '<Link to="/analytics">Analytics</Link>' in source
+    assert "<Link to=\"/\">Map</Link>" in source
     assert "const POLL_MS = 60000" in source
     assert "Card, CardContent, CardHeader, CardTitle" in source
     assert "Badge" in source
@@ -66,3 +72,11 @@ def test_frontend_uses_shadcn_charts_for_analytics_dashboard() -> None:
     assert "h-[220px] min-h-[220px]" in source or "h-[210px] min-h-[210px]" in source
     assert "recharts" in chart_source
     assert "ResponsiveContainer" in chart_source
+
+
+def test_map_dashboard_does_not_fetch_analytics_route_payload() -> None:
+    source = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+    app_body = source.split("function App() {", 1)[1]
+
+    assert "/grid/analytics-dashboard" not in app_body
+    assert "function AnalyticsPage()" in source

@@ -33,6 +33,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
+import { Link } from "@tanstack/react-router"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -1154,13 +1155,11 @@ function DiagnosticsPanel({
   summary,
   assumptions,
   consumerProxies,
-  analytics,
   mode,
 }: {
   summary: PipelineSummary | null
   assumptions: AssumptionTransparency | null
   consumerProxies: ConsumerProxyMarker[]
-  analytics: AnalyticsDashboardPayload | null
   mode: Mode
 }) {
   const counts = summary?.raw_osm_counts_by_power ?? {}
@@ -1232,10 +1231,6 @@ function DiagnosticsPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        <section>
-          <AnalyticsDashboardTabs analytics={analytics} />
-        </section>
-
         <section>
           <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Stage status</h2>
           <div className="mt-2 grid grid-cols-2 gap-1.5">
@@ -1584,6 +1579,99 @@ function RawPanel({
   )
 }
 
+function AnalyticsHeader({
+  loading,
+  onRefresh,
+}: {
+  loading: boolean
+  onRefresh: () => void
+}) {
+  return (
+    <header className="sticky top-0 z-10 border-b border-zinc-200 bg-[#e5e7e3]/95 px-4 py-3 backdrop-blur">
+      <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge className="rounded-[3px] bg-zinc-950 px-2 py-1 text-white">Tiangou analytics</Badge>
+            <Badge variant="outline" className="rounded-[3px] border-zinc-300 bg-white/75 px-2 py-1">
+              polling {POLL_MS / 1000}s
+            </Badge>
+          </div>
+          <p className="mt-1 text-xs text-zinc-600">KPIs, weak spots, provenance, demand, generation, network, and solver artifact status.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button asChild variant="outline" className="rounded-[4px] border-zinc-300 bg-white/92">
+            <Link to="/">Map</Link>
+          </Button>
+          <Button type="button" variant="outline" onClick={onRefresh} disabled={loading} className="rounded-[4px] border-zinc-300 bg-white/92">
+            <RotateCcw className={cn("size-4", loading && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
+      </div>
+    </header>
+  )
+}
+
+export function AnalyticsPage() {
+  const [analytics, setAnalytics] = useState<AnalyticsDashboardPayload | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const loadInFlight = useRef(false)
+  const analyticsAbort = useRef<AbortController | null>(null)
+  const query = "region_key=hong-kong&include_hk_interties=true&solver_include_policy=demo_full_osm&include_synthetic_generator_connections=true"
+
+  const loadAnalytics = async (showLoading = true) => {
+    if (loadInFlight.current) analyticsAbort.current?.abort()
+    loadInFlight.current = true
+    const controller = new AbortController()
+    analyticsAbort.current = controller
+    if (showLoading) setLoading(true)
+    setError(null)
+    try {
+      const response = await fetch(`${API_BASE_URL}/grid/analytics-dashboard?${query}`, {
+        signal: controller.signal,
+      })
+      if (!response.ok) throw new Error(`Analytics API returned ${response.status}`)
+      setAnalytics(await response.json() as AnalyticsDashboardPayload)
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return
+      setError(err instanceof Error ? err.message : "Could not load analytics data")
+    } finally {
+      if (analyticsAbort.current === controller) {
+        loadInFlight.current = false
+        analyticsAbort.current = null
+        if (showLoading) setLoading(false)
+      }
+    }
+  }
+
+  useEffect(() => {
+    void loadAnalytics()
+    return () => analyticsAbort.current?.abort()
+  }, [])
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void loadAnalytics(false)
+    }, POLL_MS)
+    return () => window.clearInterval(id)
+  }, [])
+
+  return (
+    <main className="min-h-[100dvh] bg-[#e5e7e3] text-zinc-950">
+      <AnalyticsHeader loading={loading} onRefresh={() => void loadAnalytics()} />
+      <div className="mx-auto max-w-7xl px-4 py-4">
+        {error && (
+          <div className="mb-3 rounded-[4px] border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+        <AnalyticsDashboardTabs analytics={analytics} />
+      </div>
+    </main>
+  )
+}
+
 function App() {
   const [assets, setAssets] = useState<GridAsset[]>([])
   const [consumerProxies, setConsumerProxies] = useState<ConsumerProxyMarker[]>([])
@@ -1592,7 +1680,6 @@ function App() {
   const [topology, setTopology] = useState<TopologyPreview | null>(null)
   const [caseData, setCaseData] = useState<PowerModelsCase | null>(null)
   const [summary, setSummary] = useState<PipelineSummary | null>(null)
-  const [analytics, setAnalytics] = useState<AnalyticsDashboardPayload | null>(null)
   const [mode, setMode] = useState<Mode>("raw")
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -1613,7 +1700,6 @@ function App() {
     try {
       const [
         response,
-        analyticsResponse,
         consumerResponse,
         assumptionSummaryResponse,
         assumptionLinesResponse,
@@ -1625,9 +1711,6 @@ function App() {
         assumptionImportsResponse,
       ] = await Promise.all([
         fetch(`${API_BASE_URL}/grid/dashboard-snapshot?${query}`, {
-          signal: controller.signal,
-        }),
-        fetch(`${API_BASE_URL}/grid/analytics-dashboard?${query}`, {
           signal: controller.signal,
         }),
         fetch(`${API_BASE_URL}/grid/consumer-proxies/important?region_key=hong-kong&limit=${IMPORTANT_CONSUMER_LIMIT}`, {
@@ -1643,7 +1726,6 @@ function App() {
         fetch(`${API_BASE_URL}/assumptions/imports`, { signal: controller.signal }),
       ])
       if (!response.ok) throw new Error(`API returned ${response.status}`)
-      if (!analyticsResponse.ok) throw new Error(`Analytics API returned ${analyticsResponse.status}`)
       if (!consumerResponse.ok) throw new Error(`Consumer proxy API returned ${consumerResponse.status}`)
       const assumptionResponses = [
         assumptionSummaryResponse,
@@ -1657,7 +1739,6 @@ function App() {
       ]
       if (assumptionResponses.some((item) => !item.ok)) throw new Error("Assumption API returned an error")
       const snapshot = await response.json() as DashboardSnapshot
-      const analyticsPayload = await analyticsResponse.json() as AnalyticsDashboardPayload
       const importantConsumerProxies = await consumerResponse.json() as ConsumerProxyMarker[]
       const assumptionSummary = await assumptionSummaryResponse.json() as AssumptionSummary
       const assumptionTableGroups = await Promise.all([
@@ -1673,7 +1754,6 @@ function App() {
       setAssets(snapshot.assets)
       setConsumerProxies(importantConsumerProxies)
       setAssumptions({ summary: assumptionSummary, tables: assumptionTables })
-      setAnalytics(analyticsPayload)
       setTopology(snapshot.topology)
       setCaseData(snapshot.powermodels_case)
       setSummary(snapshot.summary)
@@ -2049,6 +2129,9 @@ function App() {
             <Badge variant="outline" className="rounded-[3px] border-zinc-300 bg-white/75 px-2 py-1">
               polling {POLL_MS / 1000}s
             </Badge>
+            <Button asChild size="sm" variant="outline" className="h-6 rounded-[4px] border-zinc-300 bg-white/85 px-2 text-xs">
+              <Link to="/analytics">Analytics</Link>
+            </Button>
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {MODES.map((item) => {
@@ -2125,7 +2208,7 @@ function App() {
           </div>
         )}
 
-        <DiagnosticsPanel summary={summary} assumptions={assumptions} consumerProxies={consumerProxies} analytics={analytics} mode={mode} />
+        <DiagnosticsPanel summary={summary} assumptions={assumptions} consumerProxies={consumerProxies} mode={mode} />
         <RawPanel asset={selectedAsset} onClose={() => setSelectedAssetId(null)} />
       </div>
     </main>
