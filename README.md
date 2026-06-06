@@ -56,4 +56,10 @@ Run structural validation before solver handoff:
 Invoke-RestMethod http://127.0.0.1:8000/grid/topology/validation
 ```
 
+Write the preview to a file for the downstream Julia solver pipeline:
+
+```powershell
+python -m app.export_powermodels data/processed/hong_kong_16h_model.json
+```
+
 This preview uses OSM geometry, voltage-class impedance defaults, public Hong Kong peak-demand anchors, and territory-level equivalent generators. Treat it as an upstream topology-builder artifact for the Julia relaxation/export pipeline, not as an operational grid model.
