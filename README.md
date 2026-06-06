@@ -96,7 +96,7 @@ Write both Phase 1 Hong Kong snapshots plus a manifest:
 python -m app.export_powermodels data/processed --hong-kong-phase1-bundle --include-hk-interties --n-per-mode 3
 ```
 
-The bundle also writes `run_hong_kong_solver_pipeline.ps1` and `grids_solvable.txt` for the downstream Julia solve/export/base-verify/scenario steps. The script preflights `julia` on PATH and the expected solver scripts before running. Pass the cloned solver path when running it if needed:
+The bundle also writes `run_hong_kong_solver_pipeline.ps1` and `grids_solvable.txt` for the downstream Julia solve/export/base-verify/scenario steps. The script preflights a runnable `julia` command and the expected solver scripts before running. Pass the cloned solver path when running it if needed:
 
 ```powershell
 .\data\processed\run_hong_kong_solver_pipeline.ps1 -SolverPipeline "..\GridSFM\power_grid\US\topology_solver_pipeline"

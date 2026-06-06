@@ -82,6 +82,8 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert peak["_metadata"]["hk_intertie_derate"] == 0.5
     handoff_script = handoff_path.read_text(encoding="utf-8")
     assert "Get-Command julia" in handoff_script
+    assert "julia --version" in handoff_script
+    assert "Julia is on PATH but is not runnable" in handoff_script
     assert "Test-Path $ScriptPath" in handoff_script
     assert "solve_topo_json.jl" in handoff_script
     assert "export_gridsfm_data.jl" in handoff_script
