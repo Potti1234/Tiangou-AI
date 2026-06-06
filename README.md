@@ -149,6 +149,12 @@ python -m app.diagnose_gridsfm_case data/processed/hong_kong_16h_model.json
 python -m app.diagnose_gridsfm_case data/processed/hong_kong_16h_model.solver_sanitized.json
 ```
 
+To reproduce the export-option bisection, write the five planned raw variants plus diagnostics under `data/processed/experiments/`. Add `--skip-solver` when you only want the export/diagnostic manifest:
+
+```powershell
+python -m app.run_gridsfm_export_experiments --output-root data/processed/experiments --n-per-mode 1
+```
+
 The generated PowerShell handoff is still available and defaults to `third_party\gridsfm_solver`:
 
 ```powershell
