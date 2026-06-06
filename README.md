@@ -72,13 +72,13 @@ Invoke-RestMethod http://127.0.0.1:8000/grid/topology/validation
 
 Validation returns structural errors separately from research-model quality metrics such as `low_confidence_counts`, `provenance_summary`, and branch-to-bus voltage mismatch diagnostics. Severe branch voltage mismatches are surfaced as warnings before solver handoff.
 
-Inspect the assumption-table scaffold and provenance validation summary:
+Inspect the assumption-table provenance validation summary:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/assumptions/summary
 ```
 
-The scaffold lives under `data/assumptions/` and defines the auditable CSV schemas for future line, transformer, demand-profile, data-center, generator, contingency, and import assumptions. Slice 1 intentionally ships schema-only CSVs; later enrichment slices must fill rows with `observed_public`, `inferred_from_public_statistics`, or `synthetic_engineering_default` provenance plus confidence, method, source, unit, assumptions, and date/year fields. Drilldown endpoints are available at `/assumptions/lines`, `/assumptions/transformers`, `/assumptions/data-centers`, `/assumptions/generators`, `/assumptions/contingencies`, and `/assumptions/imports`.
+The tables live under `data/assumptions/` and define auditable CSV inputs for line, transformer, demand-profile, data-center, generator, contingency, and import assumptions. Line/cable thermal ratings and impedance defaults are populated and exported into solver branches with `parameter_source`, `parameter_method`, `parameter_provenance`, `parameter_confidence`, source detail, and assumption text. Remaining future-slice tables are still surfaced as empty-table warnings until populated. Drilldown endpoints are available at `/assumptions/lines`, `/assumptions/transformers`, `/assumptions/data-centers`, `/assumptions/generators`, `/assumptions/contingencies`, and `/assumptions/imports`.
 
 Write the preview to a file for the downstream Julia solver pipeline:
 
@@ -167,7 +167,7 @@ Current Hong Kong Phase 1 smoke status, using `--include-hk-interties --min-volt
 
 The dashboard and API now default solver previews to `solver_include_policy=demo_full_osm` for visual completeness. A current Hong Kong demo preview audit retains 51 solver buses, 60 branches, 55 loads, 7 generators/imports, and 6 tagged OSM generators, including Lamma Power Station at 3736 MW and Lamma Winds at 0.8 MW. Demo-retained inferred assets are tagged with explicit provenance and validation warnings, while `strict_transmission` remains available for conservative export comparison.
 
-This preview uses OSM geometry, voltage-class impedance and charging defaults, public Hong Kong peak-demand anchors, and territory-level equivalent generators. Treat it as an upstream topology-builder artifact for the Julia relaxation/export pipeline, not as an operational grid model.
+This preview uses OSM geometry, table-backed voltage-class impedance/charging/rating defaults, public Hong Kong peak-demand anchors, and territory-level equivalent generators. Treat it as an upstream topology-builder artifact for the Julia relaxation/export pipeline, not as an operational grid model.
 Exported buses, branches, loads, and generators retain `provenance` and `confidence` annotations, with aggregate counts in `_metadata.provenance_summary`, so inferred values can be audited before scenario generation.
 Demand is allocated within each service territory using a voltage-weighted substation proxy and a 0.95 assumed load power factor while preserving the public CLP/HK Electric snapshot totals.
 Generators also carry source OSM id, name, operator, `energy_source`, parsed capacity tags, connection method, `resource_type`, and `cost_class` metadata so tagged local plants, synthetic generator connections, and territory-level capacity equivalents remain distinguishable after export.

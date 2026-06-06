@@ -1,36 +1,57 @@
 from fastapi.testclient import TestClient
 
 from app import main
+from app.assumptions.lines import branch_parameter_defaults
 from app.assumptions.provenance import ASSUMPTION_TABLES, REQUIRED_PROVENANCE_COLUMNS, read_table_rows
 from app.assumptions.validation import build_assumption_validation_summary
 
 
-def test_assumption_csv_scaffolding_has_required_provenance_columns() -> None:
+def test_assumption_csvs_have_required_provenance_columns() -> None:
     assert len(ASSUMPTION_TABLES) == 12
 
+    row_counts = {}
     for table in ASSUMPTION_TABLES:
         assert table.path.exists(), table.path
         fieldnames, rows = read_table_rows(table)
-        assert rows == []
+        row_counts[table.key] = len(rows)
         assert set(table.required_columns) <= set(fieldnames)
         assert set(REQUIRED_PROVENANCE_COLUMNS) <= set(fieldnames)
 
+    assert row_counts["line_thermal_rating_defaults"] > 0
+    assert row_counts["cable_impedance_defaults"] > 0
+    assert row_counts["overhead_line_impedance_defaults"] > 0
 
-def test_assumption_validation_summary_reports_scaffold_only_state() -> None:
+
+def test_assumption_validation_summary_reports_line_enrichment_and_remaining_empty_tables() -> None:
     payload = build_assumption_validation_summary()
 
     assert payload["schema"] == "tiangou.assumptions.validation_summary.v1"
     assert payload["status"] == "warning"
     assert payload["table_count"] == 12
-    assert payload["row_count"] == 0
+    assert payload["row_count"] == 26
     assert payload["errors"] == []
-    assert payload["warnings"][0]["code"] == "scaffold_only"
+    assert {warning["code"] for warning in payload["warnings"]} == {"empty_table"}
     assert set(payload["provenance_classes"]) == {
         "observed_public",
         "inferred_from_public_statistics",
         "synthetic_engineering_default",
     }
     assert all(table["status"] == "ok" for table in payload["tables"])
+    assert payload["provenance_counts"] == {"synthetic_engineering_default": 26}
+
+
+def test_line_assumption_lookup_scales_rating_and_exposes_provenance() -> None:
+    defaults = branch_parameter_defaults("line", 400.0, circuit_count=2)
+
+    assert defaults["rate_mva"] == 3600.0
+    assert defaults["rate_mva_per_circuit"] == 1800.0
+    assert defaults["parameter_source"] == "assumption_table_lookup"
+    assert defaults["parameter_provenance"] == "synthetic_engineering_default"
+    assert defaults["parameter_confidence"] == 0.62
+    assert defaults["parameter_table_keys"] == [
+        "overhead_line_impedance_defaults",
+        "line_thermal_rating_defaults",
+    ]
 
 
 def test_assumption_api_summary_and_drilldowns() -> None:
@@ -54,6 +75,7 @@ def test_assumption_api_summary_and_drilldowns() -> None:
     summary_payload = summary_response.json()
     assert summary_payload["table_count"] == 12
     assert summary_payload["status"] == "warning"
+    assert summary_payload["row_count"] == 26
     assert {table["key"] for table in lines_response.json()} == {
         "line_thermal_rating_defaults",
         "cable_impedance_defaults",

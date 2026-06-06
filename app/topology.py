@@ -5,6 +5,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from app.assumptions.lines import branch_parameter_defaults, line_lookup_voltage_metadata
 from app.data_sources import CalibrationBundle, load_calibration_bundle
 
 
@@ -67,27 +68,6 @@ HK_ELECTRIC_DISTRICT_CENTROIDS = {
     "lamma": (22.206, 114.126),
 }
 
-OVERHEAD_LINE_DEFAULTS = {
-    400.0: {"r_ohm_per_km": 0.028, "x_ohm_per_km": 0.32, "b_us_per_km": 3.6, "rate_mva": 1800.0},
-    275.0: {"r_ohm_per_km": 0.035, "x_ohm_per_km": 0.34, "b_us_per_km": 3.2, "rate_mva": 1200.0},
-    220.0: {"r_ohm_per_km": 0.045, "x_ohm_per_km": 0.38, "b_us_per_km": 2.8, "rate_mva": 900.0},
-    132.0: {"r_ohm_per_km": 0.08, "x_ohm_per_km": 0.42, "b_us_per_km": 2.2, "rate_mva": 450.0},
-    110.0: {"r_ohm_per_km": 0.10, "x_ohm_per_km": 0.45, "b_us_per_km": 2.0, "rate_mva": 350.0},
-    33.0: {"r_ohm_per_km": 0.25, "x_ohm_per_km": 0.35, "b_us_per_km": 1.2, "rate_mva": 90.0},
-}
-UNDERGROUND_CABLE_DEFAULTS = {
-    400.0: {"r_ohm_per_km": 0.018, "x_ohm_per_km": 0.12, "b_us_per_km": 38.0, "rate_mva": 1400.0},
-    275.0: {"r_ohm_per_km": 0.023, "x_ohm_per_km": 0.13, "b_us_per_km": 32.0, "rate_mva": 900.0},
-    220.0: {"r_ohm_per_km": 0.03, "x_ohm_per_km": 0.14, "b_us_per_km": 26.0, "rate_mva": 700.0},
-    132.0: {"r_ohm_per_km": 0.055, "x_ohm_per_km": 0.16, "b_us_per_km": 18.0, "rate_mva": 300.0},
-    110.0: {"r_ohm_per_km": 0.07, "x_ohm_per_km": 0.18, "b_us_per_km": 15.0, "rate_mva": 250.0},
-    33.0: {"r_ohm_per_km": 0.20, "x_ohm_per_km": 0.20, "b_us_per_km": 8.0, "rate_mva": 75.0},
-}
-BRANCH_PARAMETER_TABLES = {
-    "line": OVERHEAD_LINE_DEFAULTS,
-    "minor_line": OVERHEAD_LINE_DEFAULTS,
-    "cable": UNDERGROUND_CABLE_DEFAULTS,
-}
 TRANSFORMER_DEFAULTS = {
     "autotransformer": {"br_r": 0.005, "br_x": 0.08},
     "two_winding": {"br_r": 0.005, "br_x": 0.1},
@@ -312,17 +292,14 @@ def _nearest_bus(
     return str(nearest_effective["id"]), float(nearest_effective["distance"])
 
 
-def _branch_defaults(power: str, voltage_kv: float | None) -> dict[str, Any]:
-    if voltage_kv is None:
-        return {"r_ohm_per_km": None, "x_ohm_per_km": None, "rate_mva": None, "parameter_table": None}
-    table_name = "underground_cable_defaults" if power == "cable" else "overhead_line_defaults"
-    table = BRANCH_PARAMETER_TABLES.get(power, OVERHEAD_LINE_DEFAULTS)
-    nearest = min(table, key=lambda candidate: abs(candidate - voltage_kv))
-    defaults = dict(table[nearest])
-    defaults["matched_voltage_kv"] = nearest
-    defaults["parameter_table"] = table_name
-    defaults["parameter_source"] = "lookup_table"
-    return defaults
+def _branch_defaults(
+    power: str,
+    voltage_kv: float | None,
+    *,
+    location: str | None = None,
+    circuit_count: int = 1,
+) -> dict[str, Any]:
+    return branch_parameter_defaults(power, voltage_kv, location=location, circuit_count=circuit_count)
 
 
 def _classify_preview_branch(
@@ -740,9 +717,15 @@ def build_topology_preview(
                 endpoint_bus_ids.append(bus_id)
                 endpoint_quality.append({"snap": "matched", "distance_km": distance})
 
-        defaults = _branch_defaults(record["power"], voltage_kv)
         length_km = _geometry_length_km(geometry)
         circuit_candidates = split_voltage_circuits(_circuit_tags(record))
+        circuit_count = sum(candidate["circuit_count"] for candidate in circuit_candidates)
+        defaults = _branch_defaults(
+            record["power"],
+            voltage_kv,
+            location=record.get("location"),
+            circuit_count=circuit_count,
+        )
         bus_by_id_for_class = {bus["id"]: bus for bus in [*buses, *synthetic_buses.values()]}
         circuit_class = _classify_preview_branch(endpoint_bus_ids[0], endpoint_bus_ids[1], bus_by_id_for_class)
         branches.append(
@@ -760,7 +743,7 @@ def build_topology_preview(
                 "circuits": record.get("circuits"),
                 "cables": record.get("cables"),
                 "circuit_candidates": circuit_candidates,
-                "circuit_count": sum(candidate["circuit_count"] for candidate in circuit_candidates),
+                "circuit_count": circuit_count,
                 "circuit_count_source": _circuit_count_source(circuit_candidates),
                 "circuit_class": circuit_class,
                 "parameter_defaults": defaults,
@@ -2574,7 +2557,14 @@ def _powermodels_branch(
     length_km = branch.get("length_km") or 1.0
     defaults = dict(branch.get("parameter_defaults") or {})
     if defaults.get("rate_mva") is None and voltage_kv is not None:
-        defaults.update(_branch_defaults(str(branch.get("power") or "line"), float(voltage_kv)))
+        defaults.update(
+            _branch_defaults(
+                str(branch.get("power") or "line"),
+                float(voltage_kv),
+                location=branch.get("location"),
+                circuit_count=int(branch.get("circuit_count") or 1),
+            )
+        )
     transformer_info = _inferred_transformer_info(branch, bus_by_id)
     if transformer_info is None:
         r_ohm = (defaults.get("r_ohm_per_km") or 0.08) * length_km
@@ -2584,7 +2574,7 @@ def _powermodels_branch(
         br_x = round(max(x_ohm / z_base_ohm, 0.00001), 8)
         charging_pu = _branch_charging_pu(defaults, length_km, z_base_ohm)
         transformer = False
-        parameter_source = branch.get("provenance")
+        parameter_source = defaults.get("parameter_source") or branch.get("provenance")
         transformer_parameter_table = None
         tap = 1.0
     else:
@@ -2628,7 +2618,19 @@ def _powermodels_branch(
         "parameter_source": parameter_source,
         "parameter_table": transformer_parameter_table if transformer else defaults.get("parameter_table"),
         "matched_voltage_kv": defaults.get("matched_voltage_kv"),
+        "r_ohm_per_km": defaults.get("r_ohm_per_km"),
+        "x_ohm_per_km": defaults.get("x_ohm_per_km"),
+        "c_nf_per_km": defaults.get("c_nf_per_km"),
         "b_us_per_km": defaults.get("b_us_per_km"),
+        "rate_mva_per_circuit": defaults.get("rate_mva_per_circuit"),
+        "emergency_factor": defaults.get("emergency_factor"),
+        "parameter_method": defaults.get("parameter_method"),
+        "parameter_provenance": defaults.get("parameter_provenance"),
+        "parameter_confidence": defaults.get("parameter_confidence"),
+        "parameter_assumptions": defaults.get("parameter_assumptions"),
+        "parameter_source_detail": defaults.get("parameter_source_detail"),
+        "parameter_table_keys": defaults.get("parameter_table_keys"),
+        "location_class": defaults.get("location_class"),
         "length_km": length_km,
         **({"transformer_inference": transformer_info} if transformer_info is not None else {}),
 }
@@ -2797,7 +2799,10 @@ def _hk_intertie_branches(
                 "rate_mva": round(HK_INTERTIE_RATE_MVA * derate, 3),
                 "matched_voltage_kv": voltage_kv,
                 "parameter_table": "underground_cable_defaults",
-                "parameter_source": "lookup_table",
+                "parameter_source": "public_interconnection_capacity_equivalent",
+                "parameter_method": "public_intertie_capacity_with_cable_impedance_default",
+                "parameter_provenance": "observed_public",
+                "parameter_confidence": 0.5,
             },
             "endpoint_quality": [
                 {"snap": "synthetic_public_intertie", "bus_id": clp_bus["id"]},
@@ -3833,8 +3838,7 @@ def _reactive_mvar(pd_mw: float, *, power_factor: float = LOAD_DEFAULTS["power_f
 
 def _parameter_lookup_metadata() -> dict[str, Any]:
     return {
-        "overhead_line_voltage_kv": sorted(OVERHEAD_LINE_DEFAULTS),
-        "underground_cable_voltage_kv": sorted(UNDERGROUND_CABLE_DEFAULTS),
+        **line_lookup_voltage_metadata(),
         "transformer_defaults": sorted(TRANSFORMER_DEFAULTS),
         "generator_fuel_defaults": sorted(GENERATOR_FUEL_DEFAULTS),
         "equivalent_generator_defaults": sorted(EQUIVALENT_GENERATOR_DEFAULTS),

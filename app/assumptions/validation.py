@@ -81,6 +81,8 @@ def build_assumption_validation_summary() -> dict[str, Any]:
                         table_status = "error"
 
         provenance_counts = summarize_by_provenance(rows)
+        if not rows:
+            warnings.append(_warning("empty_table", table.key, "Assumption table schema is present but has no enrichment rows yet."))
         for provenance, count in provenance_counts.items():
             aggregate_provenance_counts[provenance] = aggregate_provenance_counts.get(provenance, 0) + count
         total_rows += len(rows)
