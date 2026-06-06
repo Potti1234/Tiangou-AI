@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertTriangle,
   Cable,
@@ -211,6 +211,13 @@ type PipelineSummary = {
   handoff_artifacts: Record<string, string>
 }
 
+type DashboardSnapshot = {
+  assets: GridAsset[]
+  topology: TopologyPreview
+  powermodels_case: PowerModelsCase
+  summary: PipelineSummary
+}
+
 type StageStatus = "not_run" | "running" | "warning" | "error" | "complete" | "ok"
 type Mode = "raw" | "reconstructed" | "solver" | "validation" | "handoff"
 
@@ -247,7 +254,7 @@ const API_BASE_URL =
   "http://127.0.0.1:8000"
 
 const HONG_KONG_CENTER: [number, number] = [114.1694, 22.3193]
-const POLL_MS = 5000
+const POLL_MS = 60000
 
 const MODES: Array<{ id: Mode; label: string; stage: string; icon: typeof Layers3 }> = [
   { id: "raw", label: "Raw OSM", stage: "raw_osm", icon: Database },
@@ -879,29 +886,35 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [ingesting, setIngesting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const loadInFlight = useRef(false)
+  const dashboardAbort = useRef<AbortController | null>(null)
 
-  const query = "region_key=hong-kong&include_hk_interties=true&min_voltage_kv=100"
+  const query = "region_key=hong-kong&include_hk_interties=true&min_voltage_kv=100&asset_limit=5000"
 
   const loadDashboard = async (showLoading = true) => {
+    if (loadInFlight.current) return
+    loadInFlight.current = true
+    dashboardAbort.current?.abort()
+    const controller = new AbortController()
+    dashboardAbort.current = controller
     if (showLoading) setLoading(true)
     setError(null)
     try {
-      const [assetsResponse, topologyResponse, caseResponse, summaryResponse] = await Promise.all([
-        fetch(`${API_BASE_URL}/grid/assets?region_key=hong-kong&limit=5000`),
-        fetch(`${API_BASE_URL}/grid/topology/preview?${query}`),
-        fetch(`${API_BASE_URL}/grid/topology/powermodels-preview?${query}`),
-        fetch(`${API_BASE_URL}/grid/topology/pipeline-summary?${query}`),
-      ])
-      for (const response of [assetsResponse, topologyResponse, caseResponse, summaryResponse]) {
-        if (!response.ok) throw new Error(`API returned ${response.status}`)
-      }
-      setAssets(await assetsResponse.json())
-      setTopology(await topologyResponse.json())
-      setCaseData(await caseResponse.json())
-      setSummary(await summaryResponse.json())
+      const response = await fetch(`${API_BASE_URL}/grid/dashboard-snapshot?${query}`, {
+        signal: controller.signal,
+      })
+      if (!response.ok) throw new Error(`API returned ${response.status}`)
+      const snapshot = await response.json() as DashboardSnapshot
+      setAssets(snapshot.assets)
+      setTopology(snapshot.topology)
+      setCaseData(snapshot.powermodels_case)
+      setSummary(snapshot.summary)
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return
       setError(err instanceof Error ? err.message : "Could not load dashboard data")
     } finally {
+      loadInFlight.current = false
+      if (dashboardAbort.current === controller) dashboardAbort.current = null
       if (showLoading) setLoading(false)
     }
   }
@@ -925,6 +938,7 @@ function App() {
 
   useEffect(() => {
     void loadDashboard()
+    return () => dashboardAbort.current?.abort()
   }, [])
 
   useEffect(() => {
