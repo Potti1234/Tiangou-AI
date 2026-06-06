@@ -104,6 +104,10 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
             params={"include_hk_interties": True, "min_voltage_kv": 100.0},
         )
         preview_response = client.get("/grid/topology/powermodels-preview")
+        demo_policy_response = client.get(
+            "/grid/topology/powermodels-preview",
+            params={"solver_include_policy": "demo_full_osm", "min_solver_generator_mw": 0.5},
+        )
         overnight_response = client.get(
             "/grid/topology/powermodels-preview",
             params={"demand_snapshot": "overnight_04h"},
@@ -141,6 +145,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert set(dashboard_payload) >= {"assets", "topology", "powermodels_case", "summary"}
     assert dashboard_payload["summary"]["stage_status"]["solver_topology"] == "complete"
     assert preview_response.status_code == 200
+    assert demo_policy_response.status_code == 200
     assert overnight_response.status_code == 200
     assert cooling_response.status_code == 200
     assert filtered_response.status_code == 200
@@ -152,6 +157,8 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert summary_response.status_code == 200
     payload = preview_response.json()
     assert payload["baseMVA"] == 100.0
+    assert demo_policy_response.json()["_metadata"]["solver_include_policy"] == "demo_full_osm"
+    assert demo_policy_response.json()["_metadata"]["min_solver_generator_mw"] == 0.5
     assert payload["_metadata"]["branch_count"] == 1
     assert payload["_metadata"]["load_count"] == 8
     assert payload["_metadata"]["gen_count"] == 1

@@ -1023,7 +1023,7 @@ def test_asset_reconciliation_includes_lamma_generation_assets() -> None:
     lamma_power = by_name["Lamma Power Station"]
     assert lamma_power["parsed_pmax_mw"] == 3736.0
     assert lamma_power["appears_in_topology_generators"] is True
-    assert lamma_power["status"] == "retained_solver_generator"
+    assert lamma_power["status"] == "retained_solver_generator_via_synthetic_connection"
     assert lamma_power["reason"]
 
     lamma_winds_plant = by_name["Lamma Winds Plant"]
@@ -1034,7 +1034,7 @@ def test_asset_reconciliation_includes_lamma_generation_assets() -> None:
     lamma_winds_generator = by_name["Lamma Winds Generator"]
     assert lamma_winds_generator["parsed_pmax_mw"] == 0.8
     assert lamma_winds_generator["output_tag"] == "generator:output:electricity"
-    assert lamma_winds_generator["status"] == "retained_solver_generator"
+    assert lamma_winds_generator["status"] == "retained_solver_generator_via_synthetic_connection"
     assert lamma_winds_generator["reason"]
 
 
@@ -1083,6 +1083,40 @@ def test_demo_full_osm_retains_more_branches_than_strict_policy() -> None:
         and branch["retention_policy"] == "demo_full_osm"
         for branch in demo_case["branch"].values()
     )
+
+
+def test_demo_full_osm_validation_warns_for_documented_inference() -> None:
+    rows = [*_sample_rows(), *_sample_lamma_generation_rows()]
+
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    validation = validate_powermodels_case(case)
+    diagnostics = build_topology_diagnostics(case)
+
+    warning_codes = {warning["code"] for warning in validation["warnings"]}
+    assert "demo_synthetic_branch_share_high" in warning_codes
+    assert "generator_connected_via_synthetic_branch" in warning_codes
+    assert validation["metrics"]["demo_inference"]["synthetic_generator_connection_count"] == 3
+    assert validation["metrics"]["demo_inference"]["synthetic_branch_share"] == 0.6
+    assert {
+        branch["category"]
+        for branch in diagnostics["synthetic_branches"]
+        if branch["source_id"].startswith("synthetic:generator-connection:")
+    } == {"synthetic_generator_connection"}
+
+
+def test_asset_reconciliation_reports_demo_policy_branch_statuses() -> None:
+    rows = [*_sample_rows(), *_sample_lamma_generation_rows()]
+    topology = build_topology_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+
+    reconciliation = build_asset_reconciliation(rows, topology, case)
+    linear_assets = reconciliation["linear_assets"]
+    generation_assets = reconciliation["generation_assets"]
+
+    assert next(asset for asset in linear_assets if asset["raw_id"] == "osm:way:11")["status"] == "retained_with_synthetic_endpoint"
+    assert reconciliation["summary"]["linear_status_counts"]["retained_with_synthetic_endpoint"] == 1
+    assert reconciliation["summary"]["generation_status_counts"]["retained_solver_generator_via_synthetic_connection"] == 3
+    assert all(asset["status"] == "retained_solver_generator_via_synthetic_connection" for asset in generation_assets)
 
 
 def test_asset_reconciliation_classifies_raw_lines_and_cables() -> None:

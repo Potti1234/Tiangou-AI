@@ -1531,6 +1531,7 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
     calibration_metrics = _calibration_validation_metrics(case, loads)
     warnings.extend(calibration_metrics["warnings"])
     errors.extend(calibration_metrics["errors"])
+    warnings.extend(_demo_inference_validation_warnings(case, branches, generators))
     voltage_mismatches = _branch_voltage_mismatches(buses, branches)
     severe_voltage_mismatches = [
         mismatch
@@ -1607,6 +1608,7 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
             "calibration": calibration_metrics["metrics"],
             "branch_voltage_mismatch_count": len(voltage_mismatches),
             "severe_branch_voltage_mismatch_count": len(severe_voltage_mismatches),
+            "demo_inference": _demo_inference_metrics(case, branches, generators),
         },
         "islands": island_report["islands"],
         "voltage_mismatches": voltage_mismatches,
@@ -1658,7 +1660,11 @@ def build_asset_reconciliation(
         if asset["status"]
         not in {
             "retained_solver_branch",
+            "retained_solver_branch_demo_policy",
+            "retained_with_inferred_voltage",
+            "retained_with_synthetic_endpoint",
             "retained_solver_generator",
+            "retained_solver_generator_via_synthetic_connection",
             "reconstructed_preview_only",
             "preview_generation_candidate",
         }
@@ -1697,7 +1703,7 @@ def _reconcile_linear_assets(
             merged_by_source[str(source_id)] = branch
 
     solver_branch_by_source = {
-        str(branch.get("source_id")): str(branch_id)
+        str(branch.get("source_id")): (str(branch_id), branch)
         for branch_id, branch in (case.get("branch") or {}).items()
         if branch.get("source_id")
     }
@@ -1711,13 +1717,16 @@ def _reconcile_linear_assets(
         merged_branch = merged_by_source.get(raw_id)
         linked_branch = preview_branch or merged_branch
         linked_branch_id = str(linked_branch.get("id")) if linked_branch else None
-        solver_branch_id = solver_branch_by_source.get(linked_branch_id or raw_id)
+        solver_branch_match = solver_branch_by_source.get(linked_branch_id or raw_id)
+        solver_branch_id = solver_branch_match[0] if solver_branch_match else None
+        solver_branch = solver_branch_match[1] if solver_branch_match else None
         status, reason = _linear_reconciliation_status(
             record=record,
             raw_id=raw_id,
             preview_branch=preview_branch,
             merged_branch=merged_branch,
             solver_branch_id=solver_branch_id,
+            solver_branch=solver_branch,
         )
         assets.append(
             {
@@ -1746,15 +1755,23 @@ def _linear_reconciliation_status(
     preview_branch: Mapping[str, Any] | None,
     merged_branch: Mapping[str, Any] | None,
     solver_branch_id: str | None,
+    solver_branch: Mapping[str, Any] | None,
 ) -> tuple[str, str]:
     if solver_branch_id is not None:
+        if solver_branch and solver_branch.get("retention_policy") == "demo_full_osm":
+            circuit_class = str(solver_branch.get("circuit_class") or "")
+            if circuit_class in {"tap", "isolated"}:
+                return "retained_with_synthetic_endpoint", "Raw line or cable is retained by demo_full_osm with synthetic endpoint handling."
+            if solver_branch.get("matched_voltage_kv") is not None and not record.get("voltage_kv"):
+                return "retained_with_inferred_voltage", "Raw line or cable is retained by demo_full_osm with inferred voltage parameters."
+            return "retained_solver_branch_demo_policy", "Raw line or cable is retained by the demo_full_osm solver policy."
         return "retained_solver_branch", "Raw line or cable is represented by a solver-retained branch."
     if merged_branch is not None:
         return "merged_into_reconstructed_circuit", "Raw segment was merged with adjacent OSM segments into one reconstructed circuit."
     if preview_branch is not None:
         circuit_class = str(preview_branch.get("circuit_class") or "unknown")
         if circuit_class == "self_loop":
-            return "dropped_self_loop", "Reconstructed branch connects a facility to itself and is removed before solver export."
+            return "still_dropped_self_loop", "Reconstructed branch connects a facility to itself and is removed before solver export."
         if circuit_class == "tap":
             return "dropped_tap", "Reconstructed branch terminates at a synthetic endpoint and is not exported as an inter-facility solver branch."
         if circuit_class == "isolated":
@@ -1765,7 +1782,7 @@ def _linear_reconciliation_status(
     if record.get("voltage_kv"):
         return "filtered_low_voltage", "Raw line or cable is absent from the filtered reconstructed view, commonly because of the minimum voltage threshold."
     if len(record.get("geometry") or []) < 2:
-        return "missing_geometry", "Raw line or cable does not have enough geometry to reconstruct endpoints."
+        return "still_dropped_invalid_geometry", "Raw line or cable does not have enough geometry to reconstruct endpoints."
     return "unknown", "No reconstructed branch could be linked to this raw line or cable."
 
 
@@ -1781,7 +1798,7 @@ def _reconcile_generation_assets(
     topology_bus_ids = {str(bus.get("id")) for bus in topology.get("buses") or []}
     solver_bus_source_ids = {str(bus.get("source_id")) for bus in (case.get("bus") or {}).values() if bus.get("source_id")}
     solver_gen_by_source = {
-        str(generator.get("source_id")): str(generator_id)
+        str(generator.get("source_id")): (str(generator_id), generator)
         for generator_id, generator in (case.get("gen") or {}).items()
         if generator.get("source_id")
     }
@@ -1798,7 +1815,9 @@ def _reconcile_generation_assets(
         generator_id = f"gen:{record['osm_type']}:{record['osm_id']}"
         topology_generator = topology_generators.get(generator_id)
         mapped_bus_id = str(topology_generator.get("bus_id")) if topology_generator else None
-        solver_generator_id = solver_gen_by_source.get(generator_id)
+        solver_generator_match = solver_gen_by_source.get(generator_id)
+        solver_generator_id = solver_generator_match[0] if solver_generator_match else None
+        solver_generator = solver_generator_match[1] if solver_generator_match else None
         parsed_pmax_mw, capacity_tag = _generator_capacity(record.get("tags") or {})
         status, reason = _generation_reconciliation_status(
             record=record,
@@ -1807,7 +1826,9 @@ def _reconcile_generation_assets(
             topology_bus_ids=topology_bus_ids,
             solver_bus_source_ids=solver_bus_source_ids,
             solver_generator_id=solver_generator_id,
+            solver_generator=solver_generator,
             equivalent_gen_count=equivalent_gen_count,
+            min_solver_generator_mw=float((case.get("_metadata") or {}).get("min_solver_generator_mw") or DEFAULT_MIN_SOLVER_GENERATOR_MW),
         )
         assets.append(
             {
@@ -1844,9 +1865,13 @@ def _generation_reconciliation_status(
     topology_bus_ids: set[str],
     solver_bus_source_ids: set[str],
     solver_generator_id: str | None,
+    solver_generator: Mapping[str, Any] | None,
     equivalent_gen_count: int,
+    min_solver_generator_mw: float,
 ) -> tuple[str, str]:
     if solver_generator_id is not None:
+        if solver_generator and solver_generator.get("connection_method") == "synthetic_connection_to_nearest_substation":
+            return "retained_solver_generator_via_synthetic_connection", "Raw plant or generator is exported as a solver generator via a documented synthetic connection."
         return "retained_solver_generator", "Raw plant or generator has a capacity tag and is exported as a solver generator."
     if topology_generator is None:
         if record.get("voltage_kv"):
@@ -1854,6 +1879,8 @@ def _generation_reconciliation_status(
         return "missing_voltage_or_bus_mapping", "Raw generation asset did not produce a reconstructed bus or generator candidate."
     if topology_generator.get("pmax_mw") is None:
         return "missing_capacity_tag", "Raw generation asset is visible as a candidate but lacks a parsable capacity tag for solver export."
+    if float(topology_generator.get("pmax_mw") or 0.0) < min_solver_generator_mw:
+        return "below_solver_generator_threshold", "Generator candidate has parsable capacity below the configured solver promotion threshold."
     if not mapped_bus_id or mapped_bus_id not in topology_bus_ids:
         return "missing_voltage_or_bus_mapping", "Generator candidate does not map to an available reconstructed bus."
     if mapped_bus_id not in solver_bus_source_ids:
@@ -1984,6 +2011,8 @@ def _is_synthetic_solver_branch(branch: Mapping[str, Any]) -> bool:
 def _synthetic_branch_category(branch: Mapping[str, Any]) -> str:
     provenance = str(branch.get("provenance") or "")
     source_id = str(branch.get("source_id") or "")
+    if provenance == "synthetic_connection_to_nearest_substation" or source_id.startswith("synthetic:generator-connection:"):
+        return "synthetic_generator_connection"
     if provenance == "synthetic_service_territory_backbone" or "service-backbone" in source_id:
         return "synthetic_service_territory_backbone"
     if provenance == "public_interconnection_capacity_equivalent":
@@ -1997,6 +2026,8 @@ def _synthetic_branch_recommended_action(branch: Mapping[str, Any]) -> str:
     category = _synthetic_branch_category(branch)
     if category == "synthetic_service_territory_backbone":
         return "replace with OSM cable/line if available"
+    if category == "synthetic_generator_connection":
+        return "replace with traced OSM generator interconnection if available"
     if category == "public_interconnection_capacity_equivalent":
         return "keep as documented equivalent"
     if category == "synthetic_endpoint_bridge":
@@ -2300,6 +2331,83 @@ def _case_quality_metrics(
             for name, items in collections.items()
         },
     }
+
+
+def _demo_inference_metrics(
+    case: Mapping[str, Any],
+    branches: Mapping[str, Any],
+    generators: Mapping[str, Any],
+) -> dict[str, Any]:
+    metadata = case.get("_metadata") or {}
+    synthetic_branch_count = sum(1 for branch in branches.values() if _is_synthetic_solver_branch(branch))
+    synthetic_generator_connection_count = sum(
+        1
+        for generator in generators.values()
+        if generator.get("connection_method") == "synthetic_connection_to_nearest_substation"
+    )
+    inferred_voltage_count = int((metadata.get("voltage_inference") or {}).get("inferred") or 0)
+    default_capacity_generator_count = sum(
+        1
+        for generator in generators.values()
+        if generator.get("provenance") == "osm_without_capacity_inferred_default"
+    )
+    return {
+        "solver_include_policy": metadata.get("solver_include_policy"),
+        "synthetic_branch_count": synthetic_branch_count,
+        "synthetic_branch_share": round(synthetic_branch_count / len(branches), 6) if branches else 0.0,
+        "synthetic_generator_connection_count": synthetic_generator_connection_count,
+        "inferred_voltage_count": inferred_voltage_count,
+        "default_capacity_generator_count": default_capacity_generator_count,
+    }
+
+
+def _demo_inference_validation_warnings(
+    case: Mapping[str, Any],
+    branches: Mapping[str, Any],
+    generators: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    metrics = _demo_inference_metrics(case, branches, generators)
+    if metrics["solver_include_policy"] != "demo_full_osm":
+        return []
+    warnings = []
+    if metrics["synthetic_branch_share"] > 0.25:
+        warnings.append(
+            {
+                "code": "demo_synthetic_branch_share_high",
+                "severity": "warning",
+                "message": "Demo solver case retains a high share of inferred or synthetic branches.",
+                "synthetic_branch_share": metrics["synthetic_branch_share"],
+                "synthetic_branch_count": metrics["synthetic_branch_count"],
+            }
+        )
+    if metrics["synthetic_generator_connection_count"]:
+        warnings.append(
+            {
+                "code": "generator_connected_via_synthetic_branch",
+                "severity": "info",
+                "message": "One or more OSM generators are connected to the solver case through documented synthetic branches.",
+                "count": metrics["synthetic_generator_connection_count"],
+            }
+        )
+    if metrics["inferred_voltage_count"]:
+        warnings.append(
+            {
+                "code": "unknown_voltage_inferred",
+                "severity": "info",
+                "message": "One or more buses or branches use inferred voltage in the solver case.",
+                "count": metrics["inferred_voltage_count"],
+            }
+        )
+    if metrics["default_capacity_generator_count"]:
+        warnings.append(
+            {
+                "code": "generator_default_capacity",
+                "severity": "info",
+                "message": "One or more promoted generators use default inferred capacity rather than an OSM capacity tag.",
+                "count": metrics["default_capacity_generator_count"],
+            }
+        )
+    return warnings
 
 
 def _branch_voltage_mismatches(
