@@ -144,6 +144,29 @@ type ValidationPayload = {
   voltage_mismatches: Array<{ source_id?: string | null }>
 }
 
+type TopologyDiagnosticBranch = {
+  solver_branch_id: string
+  source_id: string | null
+  provenance: string | null
+  category: string
+  recommended_action: string
+  from_bus_name?: string | null
+  to_bus_name?: string | null
+  from_base_kv?: number | null
+  to_base_kv?: number | null
+  branch_matched_voltage_kv?: number | null
+  rate_mva?: number | null
+  severe?: boolean
+  endpoints?: Array<{ bus_source_id?: string | null; bus_base_kv?: number | null; relative_difference: number }>
+}
+
+type TopologyDiagnostics = {
+  summary: Record<string, number>
+  synthetic_branches: TopologyDiagnosticBranch[]
+  voltage_mismatches: TopologyDiagnosticBranch[]
+  recommended_next_fixes: Array<{ category: string; recommended_action: string; count: number }>
+}
+
 type PipelineSummary = {
   stage_status: Record<string, StageStatus>
   raw_osm_counts_by_power: Record<string, number>
@@ -151,6 +174,7 @@ type PipelineSummary = {
   quality: Record<string, unknown>
   solver_metadata: Record<string, unknown>
   validation: ValidationPayload
+  diagnostics?: TopologyDiagnostics
   handoff_artifacts: Record<string, string>
 }
 
@@ -356,6 +380,39 @@ function CountBadges({ counts }: { counts: Record<string, number> }) {
   )
 }
 
+function DiagnosticIssueList({ title, items }: { title: string; items: TopologyDiagnosticBranch[] }) {
+  if (!items.length) {
+    return (
+      <div>
+        <p className="mb-1 text-[11px] font-medium text-zinc-500">{title}</p>
+        <p className="rounded-[4px] border border-zinc-200 bg-white/70 px-2 py-1.5 text-xs text-zinc-500">No issues reported.</p>
+      </div>
+    )
+  }
+  return (
+    <div>
+      <p className="mb-1 text-[11px] font-medium text-zinc-500">{title}</p>
+      <div className="space-y-1.5">
+        {items.slice(0, 5).map((item) => (
+          <div key={`${item.solver_branch_id}-${item.category}`} className="rounded-[4px] border border-zinc-200 bg-white/75 p-2">
+            <div className="flex items-start justify-between gap-2">
+              <p className="min-w-0 truncate font-mono text-[11px] font-semibold text-zinc-950">{item.source_id ?? item.solver_branch_id}</p>
+              <Badge variant="outline" className="shrink-0 rounded-[3px] border-zinc-300 bg-zinc-50 text-[10px]">
+                {item.category}
+              </Badge>
+            </div>
+            <p className="mt-1 text-xs text-zinc-600">{item.recommended_action}</p>
+            <p className="mt-1 truncate text-[11px] text-zinc-500">
+              {formatNumber(item.from_base_kv, 1)} kV to {formatNumber(item.to_base_kv, 1)} kV
+              {typeof item.branch_matched_voltage_kv === "number" ? `, branch ${formatNumber(item.branch_matched_voltage_kv, 1)} kV` : ""}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function RawMarker({ asset, selected }: { asset: GridAsset; selected: boolean }) {
   const style = styleFor(asset.power)
   const Icon = style.icon
@@ -435,6 +492,9 @@ function DiagnosticsPanel({
   const calibrationWarnings = Array.isArray(summary?.solver_metadata.calibration_warnings)
     ? summary.solver_metadata.calibration_warnings.filter((warning): warning is string => typeof warning === "string")
     : []
+  const topologyDiagnostics = summary?.diagnostics
+  const diagnosticSummary = topologyDiagnostics?.summary ?? {}
+  const severeVoltageMismatches = (topologyDiagnostics?.voltage_mismatches ?? []).filter((item) => item.severe)
 
   return (
     <aside className="absolute bottom-3 right-3 top-3 z-[2] flex w-[390px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-[6px] border border-zinc-300 bg-[#fbfbfa]/95 shadow-[0_22px_70px_-42px_rgba(24,24,27,0.75)]">
@@ -536,6 +596,27 @@ function DiagnosticsPanel({
             {calibrationWarnings.length > 0 && (
               <div className="rounded-[4px] border border-blue-300 bg-blue-50 px-2 py-1.5 text-xs leading-5 text-blue-900">
                 {calibrationWarnings[0]}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="mt-4">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Solver diagnostics</h2>
+          <div className="mt-2 rounded-[4px] border border-zinc-200 bg-white/70 px-2">
+            <MetadataRow label="Synthetic branches" value={diagnosticSummary.synthetic_branch_count} />
+            <MetadataRow label="Synthetic share" value={typeof diagnosticSummary.synthetic_branch_share === "number" ? `${formatNumber(diagnosticSummary.synthetic_branch_share * 100, 1)}%` : "n/a"} />
+            <MetadataRow label="Voltage mismatches" value={diagnosticSummary.voltage_mismatch_count} />
+            <MetadataRow label="Severe mismatches" value={diagnosticSummary.severe_voltage_mismatch_count} />
+            <MetadataRow label="Missing provenance" value={diagnosticSummary.missing_provenance_count} />
+          </div>
+          <div className="mt-2 space-y-2">
+            <DiagnosticIssueList title="Top synthetic branches" items={topologyDiagnostics?.synthetic_branches ?? []} />
+            <DiagnosticIssueList title="Top severe voltage mismatches" items={severeVoltageMismatches} />
+            {(topologyDiagnostics?.recommended_next_fixes ?? []).length > 0 && (
+              <div>
+                <p className="mb-1 text-[11px] font-medium text-zinc-500">Recommended next fixes</p>
+                <CountBadges counts={Object.fromEntries((topologyDiagnostics?.recommended_next_fixes ?? []).map((item) => [`${item.category}: ${item.recommended_action}`, item.count]))} />
               </div>
             )}
           </div>
