@@ -21,12 +21,16 @@ def test_export_powermodels_case_writes_json(tmp_path) -> None:
     )
 
     assert result["validation"]["status"] == "warning"
-    assert result["validation"]["warnings"][0]["code"] == "synthetic_load_share_high"
+    assert result["validation"]["warnings"][0]["code"] == "hk_electric_observed_total_mismatch"
+    assert result["validation"]["warnings"][-1]["code"] == "clp_inferred_from_territory_total"
     assert result["metadata"]["branch_count"] == 1
     assert result["metadata"]["inferred_transformer_branch_count"] == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["baseMVA"] == 100.0
-    assert payload["_metadata"]["total_pd_mw"] == 7336.0
+    assert payload["_metadata"]["total_pd_mw"] == 7385.731
+    assert payload["_metadata"]["provenance_summary"]["load"] == {
+        "inferred_clp_from_hk_total_minus_hk_electric": 8
+    }
 
 
 def test_export_hk_electric_load_allocation_writes_provenance_artifact(tmp_path) -> None:
@@ -41,13 +45,15 @@ def test_export_hk_electric_load_allocation_writes_provenance_artifact(tmp_path)
         snap_tolerance_km=0.2,
     )
 
-    assert result["load_count"] == 15
-    assert result["total_source_energy_gwh"] == 9914.0
+    assert result["load_count"] == 23
+    assert result["total_source_energy_gwh"] == 45527.223
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert payload["schema"] == "tiangou.hk_electric_load_allocation.v1"
-    assert payload["metadata"]["calibration"]["observed_hk_electric_total_gwh"] == 9914.0
-    assert payload["metadata"]["total_pd_mw"] == 2079.203
-    assert len(payload["loads"]) == 15
+    assert payload["schema"] == "tiangou.load_allocation.v2"
+    assert payload["metadata"]["service_territories"] == ["clp", "hk-electric"]
+    assert payload["metadata"]["calibration"]["observed_hk_electric_total_gwh"] == 10047.0
+    assert payload["metadata"]["calibration"]["inferred_clp_total_gwh"] == 35480.223
+    assert payload["metadata"]["total_pd_mw"] == 9492.178
+    assert len(payload["loads"]) == 23
     assert {
         "bus_id",
         "district",
@@ -61,7 +67,10 @@ def test_export_hk_electric_load_allocation_writes_provenance_artifact(tmp_path)
         "provenance",
         "allocation_rule",
     } <= set(payload["loads"][0])
-    assert {load["provenance"] for load in payload["loads"]} == {"observed_hk_electric_public_consumption"}
+    assert {load["provenance"] for load in payload["loads"]} == {
+        "observed_hk_electric_public_consumption",
+        "inferred_clp_from_hk_total_minus_hk_electric",
+    }
 
 
 def test_export_powermodels_case_writes_overnight_snapshot(tmp_path) -> None:
@@ -79,8 +88,8 @@ def test_export_powermodels_case_writes_overnight_snapshot(tmp_path) -> None:
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert result["demand_snapshot"] == "overnight_04h"
     assert payload["demand_snapshot"] == "overnight_04h"
-    assert payload["_metadata"]["total_pd_mw"] == 4034.8
-    assert payload["_metadata"]["total_equivalent_pmax_mw"] == 9170.0
+    assert payload["_metadata"]["total_pd_mw"] == 3286.639
+    assert payload["_metadata"]["total_equivalent_pmax_mw"] == 9657.545
 
 
 def test_export_powermodels_case_applies_min_voltage_filter(tmp_path) -> None:
@@ -168,7 +177,7 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert manifest["solver_handoff"]["grids_solvable_path"] == str(grids_solvable_path)
     assert manifest["solver_handoff"]["n_per_mode"] == 3
     assert manifest["exports"][0]["validation"]["status"] == "warning"
-    assert manifest["exports"][0]["validation"]["warnings"][0]["code"] == "synthetic_load_share_high"
+    assert manifest["exports"][0]["validation"]["warnings"][0]["code"] == "clp_inferred_from_territory_total"
 
 
 def test_export_hong_kong_phase1_bundle_writes_intertie_derate_stress_cases(tmp_path) -> None:
@@ -230,7 +239,7 @@ def test_export_hong_kong_phase1_bundle_can_select_demand_snapshots(tmp_path) ->
     assert result["demand_snapshots"] == ["peak_16h", "shoulder_10h", "cooling_peak_18h"]
     cooling_case = json.loads(expected_files[2].read_text(encoding="utf-8"))
     assert cooling_case["demand_snapshot"] == "cooling_peak_18h"
-    assert cooling_case["_metadata"]["total_pd_mw"] == 8216.32
+    assert cooling_case["_metadata"]["total_pd_mw"] == 8772.81
 
 
 def test_export_hong_kong_phase1_bundle_rejects_invalid_scenario_count(tmp_path) -> None:

@@ -135,21 +135,27 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     payload = preview_response.json()
     assert payload["baseMVA"] == 100.0
     assert payload["_metadata"]["branch_count"] == 1
-    assert payload["_metadata"]["load_count"] == 2
+    assert payload["_metadata"]["load_count"] == 8
     assert payload["_metadata"]["gen_count"] == 1
-    assert overnight_response.json()["_metadata"]["total_pd_mw"] == 4034.8
-    assert cooling_response.json()["_metadata"]["total_pd_mw"] == 8216.32
+    assert payload["_metadata"]["provenance_summary"]["load"] == {
+        "inferred_clp_from_hk_total_minus_hk_electric": 8
+    }
+    assert overnight_response.json()["_metadata"]["total_pd_mw"] == 3286.639
+    assert cooling_response.json()["_metadata"]["total_pd_mw"] == 8772.81
     assert filtered_response.json()["_metadata"]["min_voltage_kv"] == 100.0
     assert intertie_validation_response.json()["metrics"]["island_count"] == 1
     validation_payload = validation_response.json()
     assert validation_payload["status"] == "warning"
-    assert validation_payload["warnings"][0]["code"] == "synthetic_load_share_high"
+    assert validation_payload["warnings"][0]["code"] == "hk_electric_observed_total_mismatch"
+    assert validation_payload["warnings"][-1]["code"] == "clp_inferred_from_territory_total"
     assert validation_payload["metrics"]["severe_branch_voltage_mismatch_count"] == 0
-    assert validation_payload["metrics"]["low_confidence_counts"]["load"] == 2
+    assert validation_payload["metrics"]["low_confidence_counts"]["load"] == 0
+    assert validation_payload["metrics"]["calibration"]["load_provenance_class_share"]["synthetic"] == 0.0
     calibration_payload = calibration_response.json()
-    assert calibration_payload["source_year"] == 2025
-    assert calibration_payload["sector_gwh"]["commercial"] == 7250.0
-    assert "CLP territory demand is currently synthetic/inferred" in calibration_payload["warnings"][0]
+    assert calibration_payload["source_year"] == 2023
+    assert calibration_payload["sector_gwh"]["commercial"] == 7359.0
+    assert calibration_payload["inferred_clp_total_gwh"] == 35480.223
+    assert "CLP demand inferred from official Hong Kong totals" in calibration_payload["warnings"][0]
     summary_payload = summary_response.json()
     assert summary_payload["stage_status"]["raw_osm"] == "complete"
     assert summary_payload["stage_status"]["solver_topology"] == "complete"

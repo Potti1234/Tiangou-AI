@@ -33,23 +33,20 @@ def export_hk_electric_load_allocation(
         hk_intertie_derate=hk_intertie_derate,
         min_voltage_kv=min_voltage_kv,
     )
-    loads = [
-        load
-        for load in topology["loads"]
-        if load.get("service_territory") == "hk-electric"
-    ]
+    loads = list(topology["loads"])
     missing_provenance = [load["id"] for load in loads if not load.get("provenance")]
     if missing_provenance:
-        raise ValueError(f"HK Electric load allocation records are missing provenance: {', '.join(missing_provenance)}")
+        raise ValueError(f"Load allocation records are missing provenance: {', '.join(missing_provenance)}")
 
     payload = {
-        "schema": "tiangou.hk_electric_load_allocation.v1",
+        "schema": "tiangou.load_allocation.v2",
         "region_key": region_key,
         "demand_snapshot": demand_snapshot,
         "metadata": {
             "calibration": topology["metadata"].get("calibration"),
             "calibration_warnings": topology["metadata"].get("calibration_warnings", []),
             "load_count": len(loads),
+            "service_territories": sorted({str(load.get("service_territory")) for load in loads if load.get("service_territory")}),
             "total_pd_mw": round(sum(float(load.get("pd_mw") or 0.0) for load in loads), 3),
             "total_source_energy_gwh": round(sum(float(load.get("source_energy_gwh") or 0.0) for load in loads), 3),
         },
@@ -69,7 +66,7 @@ def export_hk_electric_load_allocation(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Export calibrated HK Electric load allocation records.")
+    parser = argparse.ArgumentParser(description="Export calibrated Hong Kong load allocation records.")
     parser.add_argument("database_path", type=Path)
     parser.add_argument("--output-path", type=Path, default=DEFAULT_OUTPUT_PATH)
     parser.add_argument("--region-key", default="hong-kong")

@@ -928,10 +928,12 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "allocation_method": load.get("allocation_method"),
             "allocation_weight": load.get("allocation_weight"),
             "source_file": load.get("source_file"),
+            "source_files": load.get("source_files"),
             "source_year": load.get("source_year"),
             "source_period": load.get("source_period"),
             "source_periods": load.get("source_periods"),
             "source_energy_gwh": load.get("source_energy_gwh"),
+            "inference_method": load.get("inference_method"),
             "geometry_provenance": load.get("geometry_provenance"),
         }
 
@@ -1416,6 +1418,13 @@ def _calibration_validation_metrics(
                 "synthetic_load_share": class_share["synthetic"],
             }
         )
+    if class_mw["synthetic"] > 0.0:
+        warnings.append(
+            {
+                "code": "clp_inference_missing_public_total",
+                "message": "Synthetic CLP fallback load is active because public territory totals were unavailable.",
+            }
+        )
 
     hk_loads = [
         load
@@ -1460,6 +1469,63 @@ def _calibration_validation_metrics(
                 }
             )
 
+    clp_loads = [
+        load
+        for load in loads.values()
+        if load.get("service_territory") == "clp"
+        and str(load.get("provenance") or "").startswith("inferred_clp")
+    ]
+    clp_sector_metrics: dict[str, Any] = {}
+    inferred_clp_sector_gwh = calibration.get("inferred_clp_sector_gwh") or {}
+    for sector, expected_gwh in inferred_clp_sector_gwh.items():
+        modeled_sector_gwh = sum(
+            float(load.get("source_energy_gwh") or 0.0)
+            for load in clp_loads
+            if load.get("sector") == sector
+        )
+        error_pct = _percent_error(modeled_sector_gwh, float(expected_gwh))
+        clp_sector_metrics[sector] = {
+            "modeled_gwh": round(modeled_sector_gwh, 3),
+            "expected_gwh": round(float(expected_gwh), 3),
+            "error_pct": error_pct,
+            "status": "pass" if error_pct <= 0.01 else "warn",
+        }
+        if error_pct > 0.01:
+            warnings.append(
+                {
+                    "code": "clp_inferred_sector_total_mismatch",
+                    "message": "Modeled CLP inferred sector energy differs from Hong Kong total minus HK Electric by more than rounding tolerance.",
+                    "sector": sector,
+                    "error_pct": error_pct,
+                }
+            )
+
+    territory_total_validation = calibration.get("territory_total_validation") or {}
+    modeled_source_energy_gwh = round(
+        sum(float(load.get("source_energy_gwh") or 0.0) for load in loads.values()),
+        3,
+    )
+    official_total_gwh = float(territory_total_validation.get("emsd_total_gwh") or 0.0)
+    official_total_error_pct = _percent_error(modeled_source_energy_gwh, official_total_gwh)
+    if official_total_gwh and official_total_error_pct > 3.0:
+        warnings.append(
+            {
+                "code": "official_total_source_energy_mismatch",
+                "message": "Modeled annual source energy differs from official Hong Kong total by more than 3 percent.",
+                "error_pct": official_total_error_pct,
+            }
+        )
+
+    notes = list(metadata.get("calibration_warnings") or [])
+    if clp_loads:
+        warnings.append(
+            {
+                "code": "clp_inferred_from_territory_total",
+                "severity": "info",
+                "message": "CLP demand inferred from official Hong Kong totals minus observed HK Electric demand; spatial placement remains inferred.",
+            }
+        )
+
     return {
         "errors": errors,
         "warnings": warnings,
@@ -1473,7 +1539,16 @@ def _calibration_validation_metrics(
                 "status": "pass" if territory_error_pct <= 1.0 else "warn",
             },
             "hk_electric_sector": sector_metrics,
-            "warnings": list(metadata.get("calibration_warnings") or []),
+            "clp_inferred_sector": clp_sector_metrics,
+            "official_total_source_energy": {
+                "modeled_gwh": modeled_source_energy_gwh,
+                "official_gwh": round(official_total_gwh, 3),
+                "error_pct": official_total_error_pct,
+                "status": "pass" if official_total_error_pct <= 3.0 else "warn",
+            },
+            "territory_total_validation": territory_total_validation,
+            "monthly_total_validation": calibration.get("monthly_total_validation"),
+            "warnings": notes,
         },
     }
 
@@ -2284,9 +2359,15 @@ def _demand_snapshot(demand_snapshot: str, calibration: CalibrationBundle | None
         known = ", ".join(sorted(DEMAND_SNAPSHOTS))
         raise ValueError(f"Unknown demand snapshot '{demand_snapshot}'. Known snapshots: {known}") from exc
     if calibration is not None:
-        peak_total = calibration.snapshot_total_mw.get("peak_16h") or 0.0
-        snapshot_total = calibration.snapshot_total_mw.get(demand_snapshot) or 0.0
-        snapshot["hk_electric_observed_mw"] = snapshot_total
+        hke_peak = calibration.snapshot_total_mw.get("peak_16h") or 0.0
+        clp_peak = calibration.clp_snapshot_total_mw.get("peak_16h") or 0.0
+        hke_snapshot = calibration.snapshot_total_mw.get(demand_snapshot) or 0.0
+        clp_snapshot = calibration.clp_snapshot_total_mw.get(demand_snapshot) or 0.0
+        peak_total = hke_peak + clp_peak
+        snapshot_total = hke_snapshot + clp_snapshot
+        snapshot["hk_electric_observed_mw"] = hke_snapshot
+        snapshot["clp_inferred_mw"] = clp_snapshot
+        snapshot["official_total_modeled_mw"] = snapshot_total
         snapshot["load_factor"] = round(snapshot_total / peak_total, 6) if peak_total else snapshot["load_factor"]
     return snapshot
 
@@ -2299,7 +2380,10 @@ def _allocate_loads(
 ) -> list[dict[str, Any]]:
     snapshot = _demand_snapshot(demand_snapshot, calibration)
     loads = _allocate_hk_electric_observed_loads(buses, demand_snapshot=demand_snapshot, calibration=calibration)
-    loads.extend(_allocate_synthetic_clp_loads(buses, demand_snapshot=demand_snapshot))
+    if calibration is not None and calibration.clp_inference_method:
+        loads.extend(_allocate_inferred_clp_loads(buses, demand_snapshot=demand_snapshot, calibration=calibration))
+    else:
+        loads.extend(_allocate_synthetic_clp_loads(buses, demand_snapshot=demand_snapshot))
     if loads:
         return loads
     load_factor = snapshot["load_factor"]
@@ -2443,6 +2527,67 @@ def _allocate_synthetic_clp_loads(
     return loads
 
 
+def _allocate_inferred_clp_loads(
+    buses: list[dict[str, Any]],
+    *,
+    demand_snapshot: str,
+    calibration: CalibrationBundle,
+) -> list[dict[str, Any]]:
+    territory = "clp"
+    eligible = _eligible_load_buses(buses, territory)
+    if not eligible:
+        fallback = _fallback_load_bus(buses, territory)
+        eligible = [fallback] if fallback is not None else []
+    if not eligible:
+        return []
+    weights = {bus["id"]: _load_allocation_weight(bus) for bus in eligible}
+    total_weight = sum(weights.values())
+    source_file = calibration.metadata.get("hk_total_sector_source_file")
+    source_files = [
+        calibration.metadata.get("hk_total_sector_source_file"),
+        calibration.metadata.get("customer_type_source_file"),
+        calibration.metadata.get("census_validation_source_file"),
+    ]
+    source_files = [str(path) for path in source_files if path]
+    loads: list[dict[str, Any]] = []
+    for sector, sector_gwh in calibration.inferred_clp_sector_gwh.items():
+        sector_snapshot_mw = calibration.clp_snapshot_mw_by_sector.get(sector, {}).get(demand_snapshot, 0.0)
+        sector_peak_mw = calibration.clp_peak_mw_by_sector.get(sector, 0.0)
+        if sector_gwh <= 0 or sector_snapshot_mw <= 0:
+            continue
+        for bus in eligible:
+            weight = weights[bus["id"]]
+            share = weight / total_weight
+            pd_mw = sector_snapshot_mw * share
+            peak_pd_mw = sector_peak_mw * share
+            loads.append(
+                {
+                    "id": f"load:{territory}:{sector}:{bus['id']}",
+                    "bus_id": bus["id"],
+                    "service_territory": territory,
+                    "sector": sector,
+                    "pd_mw": round(pd_mw, 3),
+                    "qd_mvar": round(_reactive_mvar(pd_mw), 3),
+                    "snapshot": demand_snapshot,
+                    "provenance": "inferred_clp_from_hk_total_minus_hk_electric",
+                    "allocation_method": "inferred_clp_voltage_weighted_substation_split",
+                    "allocation_rule": "inferred_clp_voltage_weighted_substation_split",
+                    "allocation_weight": round(weight, 6),
+                    "load_factor": round(pd_mw / peak_pd_mw, 6) if peak_pd_mw else None,
+                    "peak_pd_mw": round(peak_pd_mw, 3),
+                    "source_file": source_file,
+                    "source_files": source_files,
+                    "source_year": calibration.source_year,
+                    "source_period": "annual",
+                    "source_periods": calibration.source_periods,
+                    "source_energy_gwh": round(sector_gwh * share, 3),
+                    "inference_method": calibration.clp_inference_method,
+                    "confidence": 0.5,
+                }
+            )
+    return loads
+
+
 def _eligible_load_buses(buses: list[dict[str, Any]], territory: str) -> list[dict[str, Any]]:
     voltage_bands = (
         {"extra_high_voltage", "high_voltage", "subtransmission", "distribution"}
@@ -2499,7 +2644,15 @@ def _topology_calibration_metadata(calibration: CalibrationBundle | None) -> dic
         "end_use_year": calibration.end_use_year,
         "end_use_shares": calibration.end_use_shares,
         "snapshot_total_mw": calibration.snapshot_total_mw,
-        "observed_inferred_synthetic_note": "HK Electric demand is observed from public CSVs; CLP demand remains synthetic_missing_clp_data.",
+        "hk_total_sector_gwh": calibration.hk_total_sector_gwh,
+        "hk_total_sector_source": calibration.hk_total_sector_source,
+        "inferred_clp_sector_gwh": calibration.inferred_clp_sector_gwh,
+        "inferred_clp_total_gwh": calibration.inferred_clp_total_gwh,
+        "clp_inference_method": calibration.clp_inference_method,
+        "clp_snapshot_total_mw": calibration.clp_snapshot_total_mw,
+        "territory_total_validation": calibration.territory_total_validation,
+        "monthly_total_validation": calibration.monthly_total_validation,
+        "observed_inferred_synthetic_note": "HK Electric demand is observed from public CSVs; CLP demand is inferred from official Hong Kong totals minus observed HK Electric demand when EMSD Table 08 is available.",
     }
 
 
