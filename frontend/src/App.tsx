@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   AlertTriangle,
   Building2,
@@ -344,6 +344,19 @@ type AnalyticsDashboardPayload = {
     manifest_path: string
     manifest_exists: boolean
     manifest_export_count: number
+    freshness: {
+      raw_exports_fresh: boolean
+      solvable_exports_fresh: boolean
+      pyg_exports_fresh: boolean
+      scenario_artifacts_fresh: boolean
+      stale_codes: string[]
+      error_codes: string[]
+    }
+    verification: {
+      status: string
+      metrics: Record<string, number>
+      errors: Array<{ code: string; path?: string; stale_count?: number }>
+    } | null
     latest_raw_powermodels_export: {
       status: string
       output_path: string | null
@@ -357,6 +370,14 @@ type AnalyticsDashboardPayload = {
       total_pmax_mw?: number | null
     } | null
     feasibility_warning: string
+  }
+  model_parameters: {
+    include_hk_interties: boolean
+    solver_include_policy: string
+    include_synthetic_generator_connections: boolean
+    min_voltage_kv: number | null
+    demand_snapshot: string
+    hk_intertie_derate: number
   }
 }
 
@@ -926,13 +947,15 @@ function AnalyticsDashboardTabs({ analytics }: { analytics: AnalyticsDashboardPa
     ...row,
     label: `${row.energy_source} ${row.resource_type}`.replaceAll("_", " "),
   }))
-  const artifactRows = [
-    ["Raw PowerModels export generated", analytics.solver_artifacts.raw_powermodels_export_generated],
-    ["GridSFM relaxed/solvable JSON generated", analytics.solver_artifacts.gridsfm_relaxed_solvable_json_generated],
-    ["PyG export generated", analytics.solver_artifacts.pyg_export_generated],
-    ["Scenario files generated", analytics.solver_artifacts.scenario_files_generated],
-  ] as const
+  const artifactRows: Array<[string, boolean, string]> = [
+    ["Raw PowerModels export", analytics.solver_artifacts.raw_powermodels_export_generated, "fresh"],
+    ["GridSFM relaxed/solvable JSON", analytics.solver_artifacts.gridsfm_relaxed_solvable_json_generated, "fresh"],
+    ["PyG export", analytics.solver_artifacts.pyg_export_generated, "fresh"],
+    ["Scenario files", analytics.solver_artifacts.scenario_files_generated, "fresh"],
+  ]
   const latestExport = analytics.solver_artifacts.latest_raw_powermodels_export
+  const staleCodes = analytics.solver_artifacts.freshness.stale_codes
+  const modelParameters = analytics.model_parameters
 
   return (
     <TooltipProvider>
@@ -1034,6 +1057,17 @@ function AnalyticsDashboardTabs({ analytics }: { analytics: AnalyticsDashboardPa
           </ChartPanel>
           <ChartPanel title="Solver artifact status">
             <div className="space-y-1.5">
+              <div className="rounded-[4px] border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-zinc-700">Dashboard model</span>
+                  <Badge variant="outline" className="rounded-[3px] border-zinc-300 bg-white text-zinc-800">
+                    {modelParameters.solver_include_policy === "demo_full_osm" ? "Full demo grid" : "Transmission"}
+                  </Badge>
+                </div>
+                <p className="mt-1 text-zinc-600">
+                  {modelParameters.include_hk_interties ? "HK interties included" : "HK interties excluded"}, {modelParameters.include_synthetic_generator_connections ? "synthetic generator ties included" : "synthetic generator ties excluded"}
+                </p>
+              </div>
               {latestExport && (
                 <div className="rounded-[4px] border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-xs">
                   <div className="flex items-center justify-between gap-2">
@@ -1048,14 +1082,19 @@ function AnalyticsDashboardTabs({ analytics }: { analytics: AnalyticsDashboardPa
                   </p>
                 </div>
               )}
-              {artifactRows.map(([label, ok]) => (
+              {artifactRows.map(([label, ok, readyLabel]) => (
                 <div key={label} className="flex items-center justify-between gap-2 rounded-[4px] border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-xs">
                   <span className="text-zinc-600">{label}</span>
                   <Badge variant="outline" className={cn("rounded-[3px]", ok ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-amber-300 bg-amber-50 text-amber-900")}>
-                    {ok ? "yes" : "not yet"}
+                    {ok ? readyLabel : "missing or stale"}
                   </Badge>
                 </div>
               ))}
+              {staleCodes.length > 0 && (
+                <div className="rounded-[4px] border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+                  Stale artifacts: {staleCodes.map((code) => code.replaceAll("_", " ")).join(", ")}
+                </div>
+              )}
               <p className="text-xs leading-5 text-amber-900">{analytics.solver_artifacts.feasibility_warning}</p>
             </div>
           </ChartPanel>
@@ -1579,11 +1618,17 @@ function RawPanel({
   )
 }
 
+type AnalyticsModelMode = "full_demo" | "transmission"
+
 function AnalyticsHeader({
   loading,
+  modelMode,
+  onModeChange,
   onRefresh,
 }: {
   loading: boolean
+  modelMode: AnalyticsModelMode
+  onModeChange: (mode: AnalyticsModelMode) => void
   onRefresh: () => void
 }) {
   return (
@@ -1598,7 +1643,13 @@ function AnalyticsHeader({
           </div>
           <p className="mt-1 text-xs text-zinc-600">KPIs, weak spots, provenance, demand, generation, network, and solver artifact status.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Tabs value={modelMode} onValueChange={(value) => onModeChange(value as AnalyticsModelMode)}>
+            <TabsList className="h-8 bg-white/75">
+              <TabsTrigger value="full_demo">Full demo grid</TabsTrigger>
+              <TabsTrigger value="transmission">Transmission</TabsTrigger>
+            </TabsList>
+          </Tabs>
           <Button asChild variant="outline" className="rounded-[4px] border-zinc-300 bg-white/92">
             <Link to="/">Map</Link>
           </Button>
@@ -1616,11 +1667,21 @@ export function AnalyticsPage() {
   const [analytics, setAnalytics] = useState<AnalyticsDashboardPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [modelMode, setModelMode] = useState<AnalyticsModelMode>("full_demo")
   const loadInFlight = useRef(false)
   const analyticsAbort = useRef<AbortController | null>(null)
-  const query = "region_key=hong-kong&include_hk_interties=true&solver_include_policy=demo_full_osm&include_synthetic_generator_connections=true"
+  const query = useMemo(() => {
+    const params = new URLSearchParams({
+      region_key: "hong-kong",
+      min_voltage_kv: "100",
+      include_hk_interties: modelMode === "full_demo" ? "true" : "false",
+      solver_include_policy: modelMode === "full_demo" ? "demo_full_osm" : "strict_transmission",
+      include_synthetic_generator_connections: modelMode === "full_demo" ? "true" : "false",
+    })
+    return params.toString()
+  }, [modelMode])
 
-  const loadAnalytics = async (showLoading = true) => {
+  const loadAnalytics = useCallback(async (showLoading = true) => {
     if (loadInFlight.current) analyticsAbort.current?.abort()
     loadInFlight.current = true
     const controller = new AbortController()
@@ -1643,23 +1704,23 @@ export function AnalyticsPage() {
         if (showLoading) setLoading(false)
       }
     }
-  }
+  }, [query])
 
   useEffect(() => {
     void loadAnalytics()
     return () => analyticsAbort.current?.abort()
-  }, [])
+  }, [loadAnalytics])
 
   useEffect(() => {
     const id = window.setInterval(() => {
       void loadAnalytics(false)
     }, POLL_MS)
     return () => window.clearInterval(id)
-  }, [])
+  }, [loadAnalytics])
 
   return (
     <main className="min-h-[100dvh] bg-[#e5e7e3] text-zinc-950">
-      <AnalyticsHeader loading={loading} onRefresh={() => void loadAnalytics()} />
+      <AnalyticsHeader loading={loading} modelMode={modelMode} onModeChange={setModelMode} onRefresh={() => void loadAnalytics()} />
       <div className="mx-auto max-w-7xl px-4 py-4">
         {error && (
           <div className="mb-3 rounded-[4px] border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">

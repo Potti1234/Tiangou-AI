@@ -68,6 +68,10 @@ def test_frontend_uses_shadcn_charts_for_analytics_dashboard() -> None:
     assert "Badge" in source
     assert "TabsTrigger value=\"overview\"" in source
     assert "TabsTrigger value=\"assumptions\"" in source
+    assert "TabsTrigger value=\"full_demo\"" in source
+    assert "TabsTrigger value=\"transmission\"" in source
+    assert "solver_include_policy: modelMode === \"full_demo\" ? \"demo_full_osm\" : \"strict_transmission\"" in source
+    assert "missing or stale" in source
     assert "accessibilityLayer" in source
     assert "h-[220px] min-h-[220px]" in source or "h-[210px] min-h-[210px]" in source
     assert "recharts" in chart_source
