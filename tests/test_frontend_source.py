@@ -22,3 +22,11 @@ def test_frontend_fetches_and_renders_important_consumer_proxy_markers() -> None
     assert "ConsumerProxyMapMarker" in source
     assert "Consumers" in source
     assert "const POLL_MS = 60000" in source
+
+
+def test_frontend_restarts_dashboard_load_when_previous_request_is_in_flight() -> None:
+    source = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+
+    assert "if (loadInFlight.current) dashboardAbort.current?.abort()" in source
+    assert "if (dashboardAbort.current === controller) {" in source
+    assert "loadInFlight.current = false" in source

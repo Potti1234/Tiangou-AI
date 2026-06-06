@@ -352,6 +352,57 @@ def test_important_consumer_proxy_endpoint_prioritizes_small_important_categorie
     assert all("tags" not in marker and "geometry" not in marker for marker in payload)
 
 
+def test_important_consumer_proxy_endpoint_excludes_power_producers(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", tmp_path / "api.sqlite3")
+
+    with TestClient(main.app) as client:
+        with main.get_db() as conn:
+            upsert_consumer_proxy_elements(
+                conn,
+                proxies=[
+                    {
+                        "osm_type": "way",
+                        "osm_id": 10,
+                        "region_key": "hong-kong",
+                        "proxy_type": "building",
+                        "sector": "industrial",
+                        "weight": 500_000.0,
+                        "weight_method": "building_floor_area_proxy",
+                        "confidence": 0.7,
+                        "name": "Island Power Station",
+                        "tags": {
+                            "building": "industrial",
+                            "power": "plant",
+                            "plant:output:electricity": "800 MW",
+                        },
+                        "lat": 22.20,
+                        "lon": 114.10,
+                    },
+                    {
+                        "osm_type": "way",
+                        "osm_id": 11,
+                        "region_key": "hong-kong",
+                        "proxy_type": "building",
+                        "sector": "industrial",
+                        "weight": 400_000.0,
+                        "weight_method": "building_floor_area_proxy",
+                        "confidence": 0.7,
+                        "name": "Industrial Works",
+                        "tags": {"building": "industrial"},
+                        "lat": 22.21,
+                        "lon": 114.11,
+                    },
+                ],
+            )
+
+        response = client.get("/grid/consumer-proxies/important", params={"region_key": "hong-kong", "limit": 20})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "way:10:building" not in {marker["id"] for marker in payload}
+    assert "way:11:building" in {marker["id"] for marker in payload}
+
+
 def test_pipeline_summary_reports_running_ingest_stage(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "database_path", tmp_path / "api.sqlite3")
 

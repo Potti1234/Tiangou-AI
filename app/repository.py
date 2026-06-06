@@ -264,10 +264,18 @@ def _list_consumer_proxy_marker_rows_by_reason(
     limit: int,
 ) -> list[sqlite3.Row]:
     text = "lower(coalesce(tags_json, '') || ' ' || coalesce(name, ''))"
-    base_where = """
+    base_where = f"""
         region_key = ?
         AND lat IS NOT NULL
         AND lon IS NOT NULL
+        AND NOT (
+            {text} LIKE '%"power": "plant"%'
+            OR {text} LIKE '%"power": "generator"%'
+            OR {text} LIKE '%generator:%'
+            OR {text} LIKE '%plant:output%'
+            OR {text} LIKE '%generator:output%'
+            OR {text} LIKE '%power station%'
+        )
     """
     params: list[Any] = [region_key]
     if reason == "data_center":

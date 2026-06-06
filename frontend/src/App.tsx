@@ -960,9 +960,8 @@ function App() {
   const query = "region_key=hong-kong&include_hk_interties=true&min_voltage_kv=100&asset_limit=5000"
 
   const loadDashboard = async (showLoading = true) => {
-    if (loadInFlight.current) return
+    if (loadInFlight.current) dashboardAbort.current?.abort()
     loadInFlight.current = true
-    dashboardAbort.current?.abort()
     const controller = new AbortController()
     dashboardAbort.current = controller
     if (showLoading) setLoading(true)
@@ -989,9 +988,11 @@ function App() {
       if (err instanceof DOMException && err.name === "AbortError") return
       setError(err instanceof Error ? err.message : "Could not load dashboard data")
     } finally {
-      loadInFlight.current = false
-      if (dashboardAbort.current === controller) dashboardAbort.current = null
-      if (showLoading) setLoading(false)
+      if (dashboardAbort.current === controller) {
+        loadInFlight.current = false
+        dashboardAbort.current = null
+        if (showLoading) setLoading(false)
+      }
     }
   }
 
