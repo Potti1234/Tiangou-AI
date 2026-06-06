@@ -132,8 +132,17 @@ Verify the generated raw/solvable/PyG/scenario artifacts after the Julia handoff
 python -m app.verify_gridsfm_handoff data/processed/hong_kong_phase1_manifest.json
 ```
 
+Current Hong Kong Phase 1 smoke status, using `--include-hk-interties --min-voltage-kv 100 --n-per-mode 1`:
+
+- Tiangou validation is `ok` for both `hong_kong_16h_model.json` and `hong_kong_04h_model.json`.
+- The exported solver case has 42 buses, 53 branches, 16 loads, 3 generators/imports, one connected island, and zero severe branch-voltage mismatches.
+- GridSFM `solve_topo_json.jl` solves both snapshots at `L0` strict.
+- `export_gridsfm_data.jl` writes both `.pyg.json` files.
+- `solve_pyg_json.jl` reports `RESOLVE ok` for both base PyG exports.
+- `gen_perturbed_data.jl` with `n_per_mode=1` writes 12 feasible scenario JSON files across the two snapshots.
+
 This preview uses OSM geometry, voltage-class impedance and charging defaults, public Hong Kong peak-demand anchors, and territory-level equivalent generators. Treat it as an upstream topology-builder artifact for the Julia relaxation/export pipeline, not as an operational grid model.
 Exported buses, branches, loads, and generators retain `provenance` and `confidence` annotations, with aggregate counts in `_metadata.provenance_summary`, so inferred values can be audited before scenario generation.
 Demand is allocated within each service territory using a voltage-weighted substation proxy and a 0.95 assumed load power factor while preserving the public CLP/HK Electric snapshot totals.
 Generators also carry `energy_source`, `resource_type`, and `cost_class` metadata so tagged local plants and territory-level capacity equivalents remain distinguishable after export.
-For solver handoff, passive disconnected components are pruned and every load-bearing island receives an equivalent capacity source to avoid unsupplied islands from sparse OSM topology.
+For solver handoff, passive disconnected components and no-load generation-only fragments are pruned, load-bearing components are connected with transparent `synthetic_service_territory_backbone` branches where sparse OSM topology requires it, and every retained load-bearing island receives an equivalent capacity source.
