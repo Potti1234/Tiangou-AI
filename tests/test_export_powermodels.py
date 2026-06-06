@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -48,6 +49,7 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     db_path = tmp_path / "grid.sqlite3"
     output_dir = tmp_path / "processed"
     _seed_grid(db_path)
+    _seed_hk_electric_bus(db_path)
 
     result = export_hong_kong_phase1_bundle(
         database_path=db_path,
@@ -70,6 +72,7 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert grids_solvable_path.exists()
     assert result["include_hk_interties"] is True
     assert result["hk_intertie_derate"] == 0.5
+    assert result["intertie_derate_scenarios"] == [0.5]
     assert result["n_per_mode"] == 3
     assert len(result["exports"]) == 2
 
@@ -106,6 +109,43 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert manifest["exports"][0]["validation"]["status"] == "ok"
 
 
+def test_export_hong_kong_phase1_bundle_writes_intertie_derate_stress_cases(tmp_path) -> None:
+    db_path = tmp_path / "grid.sqlite3"
+    output_dir = tmp_path / "processed"
+    _seed_grid(db_path)
+    _seed_hk_electric_bus(db_path)
+
+    result = export_hong_kong_phase1_bundle(
+        database_path=db_path,
+        output_dir=output_dir,
+        snap_tolerance_km=0.2,
+        include_hk_interties=True,
+        intertie_derate_scenarios=(1.0, 0.5),
+        allow_validation_errors=False,
+    )
+
+    expected_files = [
+        output_dir / "hong_kong_16h_intertie_100_model.json",
+        output_dir / "hong_kong_04h_intertie_100_model.json",
+        output_dir / "hong_kong_16h_intertie_050_model.json",
+        output_dir / "hong_kong_04h_intertie_050_model.json",
+    ]
+    assert [Path(export["output_path"]) for export in result["exports"]] == expected_files
+    assert all(path.exists() for path in expected_files)
+    assert result["intertie_derate_scenarios"] == [1.0, 0.5]
+
+    base_case = json.loads(expected_files[0].read_text(encoding="utf-8"))
+    stress_case = json.loads(expected_files[2].read_text(encoding="utf-8"))
+    base_intertie = next(branch for branch in base_case["branch"].values() if branch["source_id"] == "synthetic:intertie:clp-hk-electric")
+    stress_intertie = next(branch for branch in stress_case["branch"].values() if branch["source_id"] == "synthetic:intertie:clp-hk-electric")
+    assert base_intertie["rate_a"] == 720.0
+    assert stress_intertie["rate_a"] == 360.0
+    assert (output_dir / "grids_solvable.txt").read_text(encoding="utf-8").splitlines() == [
+        f"{path.with_suffix('').with_suffix('.solvable.json')} 1"
+        for path in expected_files
+    ]
+
+
 def test_export_hong_kong_phase1_bundle_rejects_invalid_scenario_count(tmp_path) -> None:
     db_path = tmp_path / "grid.sqlite3"
     init_db(db_path)
@@ -115,6 +155,19 @@ def test_export_hong_kong_phase1_bundle_rejects_invalid_scenario_count(tmp_path)
             database_path=db_path,
             output_dir=tmp_path / "processed",
             n_per_mode=0,
+            allow_validation_errors=True,
+        )
+
+
+def test_export_hong_kong_phase1_bundle_rejects_invalid_intertie_derate_scenario(tmp_path) -> None:
+    db_path = tmp_path / "grid.sqlite3"
+    init_db(db_path)
+
+    with pytest.raises(ValueError, match="Intertie derate scenarios"):
+        export_hong_kong_phase1_bundle(
+            database_path=db_path,
+            output_dir=tmp_path / "processed",
+            intertie_derate_scenarios=(1.0, 0.0),
             allow_validation_errors=True,
         )
 
@@ -191,6 +244,30 @@ def _seed_grid(db_path) -> None:
                         {"lat": 22.3001, "lon": 114.1001},
                         {"lat": 22.3101, "lon": 114.1101},
                     ],
+                },
+            ],
+        )
+
+
+def _seed_hk_electric_bus(db_path) -> None:
+    with connect(db_path) as conn:
+        run_id = create_ingest_run(conn, "hong-kong", "query")
+        upsert_elements(
+            conn,
+            region_key="hong-kong",
+            ingest_run_id=run_id,
+            elements=[
+                {
+                    "type": "node",
+                    "id": 3,
+                    "lat": 22.27,
+                    "lon": 114.15,
+                    "tags": {
+                        "power": "substation",
+                        "name": "HK Electric Island",
+                        "operator": "HK Electric",
+                        "voltage": "275000",
+                    },
                 },
             ],
         )

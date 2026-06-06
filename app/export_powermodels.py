@@ -8,6 +8,12 @@ from app.repository import list_elements
 from app.topology import DEMAND_SNAPSHOTS, build_powermodels_preview, validate_powermodels_case
 
 
+DEMAND_SNAPSHOT_EXPORTS = (
+    ("peak_16h", "16h"),
+    ("overnight_04h", "04h"),
+)
+
+
 def export_powermodels_case(
     *,
     database_path: Path,
@@ -54,34 +60,39 @@ def export_hong_kong_phase1_bundle(
     snap_tolerance_km: float = 0.75,
     include_hk_interties: bool = False,
     hk_intertie_derate: float = 1.0,
+    intertie_derate_scenarios: tuple[float, ...] | None = None,
     n_per_mode: int = 1,
     allow_validation_errors: bool = False,
 ) -> dict[str, Any]:
     if n_per_mode < 1:
         raise ValueError("n_per_mode must be at least 1.")
 
+    derate_scenarios = intertie_derate_scenarios or (hk_intertie_derate,)
+    for derate in derate_scenarios:
+        _validate_derate_scenario(derate)
+
     exports = []
-    for demand_snapshot, filename in (
-        ("peak_16h", "hong_kong_16h_model.json"),
-        ("overnight_04h", "hong_kong_04h_model.json"),
-    ):
-        exports.append(
-            export_powermodels_case(
-                database_path=database_path,
-                output_path=output_dir / filename,
-                region_key="hong-kong",
-                snap_tolerance_km=snap_tolerance_km,
-                demand_snapshot=demand_snapshot,
-                include_hk_interties=include_hk_interties,
-                hk_intertie_derate=hk_intertie_derate,
-                allow_validation_errors=allow_validation_errors,
+    multi_derate = len(derate_scenarios) > 1
+    for derate in derate_scenarios:
+        for demand_snapshot, hour_label in DEMAND_SNAPSHOT_EXPORTS:
+            exports.append(
+                export_powermodels_case(
+                    database_path=database_path,
+                    output_path=output_dir / _bundle_filename(hour_label, derate, multi_derate=multi_derate),
+                    region_key="hong-kong",
+                    snap_tolerance_km=snap_tolerance_km,
+                    demand_snapshot=demand_snapshot,
+                    include_hk_interties=include_hk_interties,
+                    hk_intertie_derate=derate,
+                    allow_validation_errors=allow_validation_errors,
+                )
             )
-        )
 
     manifest = {
         "region_key": "hong-kong",
         "include_hk_interties": include_hk_interties,
         "hk_intertie_derate": hk_intertie_derate,
+        "intertie_derate_scenarios": list(derate_scenarios),
         "n_per_mode": n_per_mode,
         "exports": exports,
     }
@@ -89,6 +100,21 @@ def export_hong_kong_phase1_bundle(
     manifest_path = output_dir / "hong_kong_phase1_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     return {**manifest, "manifest_path": str(manifest_path)}
+
+
+def _bundle_filename(hour_label: str, derate: float, *, multi_derate: bool) -> str:
+    if not multi_derate:
+        return f"hong_kong_{hour_label}_model.json"
+    return f"hong_kong_{hour_label}_intertie_{_derate_label(derate)}_model.json"
+
+
+def _derate_label(derate: float) -> str:
+    return f"{int(round(derate * 100)):03d}"
+
+
+def _validate_derate_scenario(derate: float) -> None:
+    if derate <= 0 or derate > 1:
+        raise ValueError("Intertie derate scenarios must be greater than 0 and less than or equal to 1.")
 
 
 def _write_solver_handoff(
@@ -180,6 +206,11 @@ def main() -> None:
     parser.add_argument("--snap-tolerance-km", type=float, default=0.75)
     parser.add_argument("--demand-snapshot", choices=sorted(DEMAND_SNAPSHOTS), default="peak_16h")
     parser.add_argument("--hk-intertie-derate", type=float, default=1.0)
+    parser.add_argument(
+        "--intertie-derate-scenarios",
+        type=_parse_derate_scenarios,
+        help="Comma-separated intertie derates for --hong-kong-phase1-bundle, for example 1.0,0.75,0.5.",
+    )
     parser.add_argument("--n-per-mode", type=int, default=1)
     parser.add_argument(
         "--include-hk-interties",
@@ -205,6 +236,7 @@ def main() -> None:
             snap_tolerance_km=args.snap_tolerance_km,
             include_hk_interties=args.include_hk_interties,
             hk_intertie_derate=args.hk_intertie_derate,
+            intertie_derate_scenarios=args.intertie_derate_scenarios,
             n_per_mode=args.n_per_mode,
             allow_validation_errors=args.allow_validation_errors,
         )
@@ -220,6 +252,21 @@ def main() -> None:
             allow_validation_errors=args.allow_validation_errors,
         )
     print(json.dumps(result, indent=2, sort_keys=True))
+
+
+def _parse_derate_scenarios(raw: str) -> tuple[float, ...]:
+    try:
+        derates = tuple(float(token.strip()) for token in raw.split(",") if token.strip())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("Intertie derate scenarios must be comma-separated numbers.") from exc
+    if not derates:
+        raise argparse.ArgumentTypeError("Provide at least one intertie derate scenario.")
+    try:
+        for derate in derates:
+            _validate_derate_scenario(derate)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return derates
 
 
 if __name__ == "__main__":
