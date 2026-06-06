@@ -2,7 +2,10 @@ import json
 import math
 import re
 from collections.abc import Iterable, Mapping
+from pathlib import Path
 from typing import Any
+
+from app.data_sources import CalibrationBundle, load_calibration_bundle
 
 
 BRANCH_POWER_VALUES = {"line", "minor_line", "cable"}
@@ -22,9 +25,13 @@ BUS_POWER_VALUES = {
 }
 SUPPORT_POWER_VALUES = {"tower", "pole", "portal", "insulator"}
 
-HK_PEAK_DEMAND_MW = {
-    "clp": 7336.0,
-    "hk-electric": 2255.0,
+RAW_DATA_DIR = Path("data/raw")
+SYNTHETIC_CLP_PEAK_DEMAND_MW = 7336.0
+SYNTHETIC_CLP_SNAPSHOT_FACTORS = {
+    "peak_16h": 1.0,
+    "overnight_04h": 0.55,
+    "shoulder_10h": 0.75,
+    "cooling_peak_18h": 1.12,
 }
 HK_INTERTIE_RATE_MVA = 720.0
 DEMAND_SNAPSHOTS = {
@@ -48,6 +55,13 @@ DEMAND_SNAPSHOTS = {
 BASE_MVA = 100.0
 LOAD_DEFAULTS = {
     "power_factor": 0.95,
+}
+HK_ELECTRIC_DISTRICT_CENTROIDS = {
+    "central_western": (22.285, 114.147),
+    "eastern": (22.284, 114.224),
+    "wan_chai": (22.276, 114.176),
+    "southern": (22.247, 114.158),
+    "lamma": (22.206, 114.126),
 }
 
 OVERHEAD_LINE_DEFAULTS = {
@@ -605,7 +619,8 @@ def build_topology_preview(
 ) -> dict[str, Any]:
     _validate_derate(hk_intertie_derate)
     _validate_min_voltage(min_voltage_kv)
-    snapshot = _demand_snapshot(demand_snapshot)
+    calibration = _load_calibration_bundle()
+    snapshot = _demand_snapshot(demand_snapshot, calibration)
     records = [_row_to_record(row) for row in rows]
     buses: list[dict[str, Any]] = []
     branches: list[dict[str, Any]] = []
@@ -746,7 +761,7 @@ def build_topology_preview(
     buses = _drop_unreferenced_synthetic_buses(buses, branches)
     if include_hk_interties:
         branches.extend(_hk_intertie_branches(buses, derate=hk_intertie_derate))
-    load_allocations = _allocate_loads(buses, demand_snapshot=demand_snapshot)
+    load_allocations = _allocate_loads(buses, demand_snapshot=demand_snapshot, calibration=calibration)
     backbone_branches = _synthetic_service_territory_backbone(buses, branches, load_allocations)
     branches.extend(backbone_branches)
     circuit_class_counts = _count_by(branches, "circuit_class")
@@ -766,6 +781,8 @@ def build_topology_preview(
             "load_factor": snapshot["load_factor"],
             "demand_allocation_method": "voltage_weighted_substation_split",
             "load_power_factor": LOAD_DEFAULTS["power_factor"],
+            "calibration": _topology_calibration_metadata(calibration),
+            "calibration_warnings": calibration.warnings if calibration is not None else [],
             "include_hk_interties": include_hk_interties,
             "hk_intertie_derate": hk_intertie_derate,
             "min_voltage_kv": min_voltage_kv,
@@ -905,9 +922,17 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "provenance": load.get("provenance"),
             "confidence": load.get("confidence"),
             "service_territory": load.get("service_territory"),
+            "district": load.get("district"),
+            "sector": load.get("sector"),
             "snapshot": load.get("snapshot"),
             "allocation_method": load.get("allocation_method"),
             "allocation_weight": load.get("allocation_weight"),
+            "source_file": load.get("source_file"),
+            "source_year": load.get("source_year"),
+            "source_period": load.get("source_period"),
+            "source_periods": load.get("source_periods"),
+            "source_energy_gwh": load.get("source_energy_gwh"),
+            "geometry_provenance": load.get("geometry_provenance"),
         }
 
     gen_dict = {}
@@ -963,6 +988,8 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "load_factor": topology["metadata"]["load_factor"],
             "demand_allocation_method": topology["metadata"]["demand_allocation_method"],
             "load_power_factor": topology["metadata"]["load_power_factor"],
+            "calibration": topology["metadata"].get("calibration"),
+            "calibration_warnings": topology["metadata"].get("calibration_warnings", []),
             "include_hk_interties": topology["metadata"]["include_hk_interties"],
             "hk_intertie_derate": topology["metadata"]["hk_intertie_derate"],
             "min_voltage_kv": topology["metadata"]["min_voltage_kv"],
@@ -1226,6 +1253,8 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
             errors.append({"code": "branch_nonpositive_rating", "message": "Branch has nonpositive thermal rating.", "branch_id": branch_id})
 
     for load_id, load in loads.items():
+        if not load.get("provenance"):
+            errors.append({"code": "load_missing_provenance", "message": "Load is missing provenance metadata.", "load_id": load_id})
         missing_fields = []
         for field in ("load_bus", "pd", "qd", "status"):
             if field not in load:
@@ -1268,6 +1297,9 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
     island_report = _case_island_report(buses, branches, loads, generators)
     component_metadata = _solver_component_metadata(buses, branches, loads, generators)
     quality_metrics = _case_quality_metrics(buses, branches, loads, generators)
+    calibration_metrics = _calibration_validation_metrics(case, loads)
+    warnings.extend(calibration_metrics["warnings"])
+    errors.extend(calibration_metrics["errors"])
     voltage_mismatches = _branch_voltage_mismatches(buses, branches)
     severe_voltage_mismatches = [
         mismatch
@@ -1341,12 +1373,115 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
             "largest_component_pmax_share": component_metadata["largest_component_pmax_share"],
             "low_confidence_counts": quality_metrics["low_confidence_counts"],
             "provenance_summary": quality_metrics["provenance_summary"],
+            "calibration": calibration_metrics["metrics"],
             "branch_voltage_mismatch_count": len(voltage_mismatches),
             "severe_branch_voltage_mismatch_count": len(severe_voltage_mismatches),
         },
         "islands": island_report["islands"],
         "voltage_mismatches": voltage_mismatches,
     }
+
+
+def _calibration_validation_metrics(
+    case: Mapping[str, Any],
+    loads: Mapping[str, Any],
+) -> dict[str, Any]:
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    metadata = case.get("_metadata") or {}
+    calibration = metadata.get("calibration") or {}
+    total_pd_mw = sum(float(load.get("pd", 0.0)) * BASE_MVA for load in loads.values())
+    class_mw = {"observed": 0.0, "inferred": 0.0, "synthetic": 0.0, "unknown": 0.0}
+    for load in loads.values():
+        provenance = str(load.get("provenance") or "")
+        pd_mw = float(load.get("pd", 0.0)) * BASE_MVA
+        if provenance.startswith("observed"):
+            class_mw["observed"] += pd_mw
+        elif provenance.startswith("inferred"):
+            class_mw["inferred"] += pd_mw
+        elif provenance.startswith("synthetic"):
+            class_mw["synthetic"] += pd_mw
+        else:
+            class_mw["unknown"] += pd_mw
+
+    class_share = {
+        key: round(value / total_pd_mw, 6) if total_pd_mw else 0.0
+        for key, value in class_mw.items()
+    }
+    if class_share["synthetic"] > 0.5:
+        warnings.append(
+            {
+                "code": "synthetic_load_share_high",
+                "message": "More than 50 percent of modeled load is synthetic.",
+                "synthetic_load_share": class_share["synthetic"],
+            }
+        )
+
+    hk_loads = [
+        load
+        for load in loads.values()
+        if load.get("service_territory") == "hk-electric"
+        and str(load.get("provenance") or "").startswith("observed")
+    ]
+    modeled_hk_gwh = round(sum(float(load.get("source_energy_gwh") or 0.0) for load in hk_loads), 3)
+    observed_hk_gwh = float(calibration.get("observed_hk_electric_total_gwh") or 0.0)
+    territory_error_pct = _percent_error(modeled_hk_gwh, observed_hk_gwh)
+    if observed_hk_gwh and territory_error_pct > 1.0:
+        warnings.append(
+            {
+                "code": "hk_electric_observed_total_mismatch",
+                "message": "Modeled HK Electric source energy differs from observed HK Electric total by more than 1 percent.",
+                "error_pct": territory_error_pct,
+            }
+        )
+
+    sector_metrics: dict[str, Any] = {}
+    observed_sector_gwh = calibration.get("sector_gwh") or {}
+    for sector, observed_gwh in observed_sector_gwh.items():
+        modeled_sector_gwh = sum(
+            float(load.get("source_energy_gwh") or 0.0)
+            for load in hk_loads
+            if load.get("sector") == sector
+        )
+        error_pct = _percent_error(modeled_sector_gwh, float(observed_gwh))
+        sector_metrics[sector] = {
+            "modeled_gwh": round(modeled_sector_gwh, 3),
+            "observed_gwh": round(float(observed_gwh), 3),
+            "error_pct": error_pct,
+            "status": "pass" if error_pct <= 5.0 else "warn",
+        }
+        if error_pct > 5.0:
+            warnings.append(
+                {
+                    "code": "hk_electric_sector_total_mismatch",
+                    "message": "Modeled HK Electric sector energy differs from observed sector total by more than 5 percent.",
+                    "sector": sector,
+                    "error_pct": error_pct,
+                }
+            )
+
+    return {
+        "errors": errors,
+        "warnings": warnings,
+        "metrics": {
+            "load_provenance_class_mw": {key: round(value, 3) for key, value in class_mw.items()},
+            "load_provenance_class_share": class_share,
+            "hk_electric_territory": {
+                "modeled_gwh": modeled_hk_gwh,
+                "observed_gwh": round(observed_hk_gwh, 3),
+                "error_pct": territory_error_pct,
+                "status": "pass" if territory_error_pct <= 1.0 else "warn",
+            },
+            "hk_electric_sector": sector_metrics,
+            "warnings": list(metadata.get("calibration_warnings") or []),
+        },
+    }
+
+
+def _percent_error(modeled: float, observed: float) -> float:
+    if observed == 0.0:
+        return 0.0 if modeled == 0.0 else 100.0
+    return round(abs(modeled - observed) / observed * 100.0, 6)
 
 
 def _case_island_report(
@@ -2016,7 +2151,10 @@ def _equivalent_generators(
         if not component_loads:
             continue
 
-        peak_equivalent_pd_mw = sum(load["pd_mw"] / (load.get("load_factor") or 1.0) for load in component_loads)
+        peak_equivalent_pd_mw = sum(
+            load.get("peak_pd_mw", load["pd_mw"] / (load.get("load_factor") or 1.0))
+            for load in component_loads
+        )
         territory = _dominant_load_territory(component_loads)
         component_buses = [bus for bus in buses if bus["id"] in component]
         bus = _best_generator_bus(component_buses, territory)
@@ -2132,23 +2270,41 @@ def _best_generator_bus(
     return max(candidates, key=lambda bus: bus.get("base_kv") or 0.0)
 
 
-def _demand_snapshot(demand_snapshot: str) -> dict[str, Any]:
+def _load_calibration_bundle() -> CalibrationBundle | None:
     try:
-        return DEMAND_SNAPSHOTS[demand_snapshot]
+        return load_calibration_bundle(RAW_DATA_DIR)
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _demand_snapshot(demand_snapshot: str, calibration: CalibrationBundle | None = None) -> dict[str, Any]:
+    try:
+        snapshot = dict(DEMAND_SNAPSHOTS[demand_snapshot])
     except KeyError as exc:
         known = ", ".join(sorted(DEMAND_SNAPSHOTS))
         raise ValueError(f"Unknown demand snapshot '{demand_snapshot}'. Known snapshots: {known}") from exc
+    if calibration is not None:
+        peak_total = calibration.snapshot_total_mw.get("peak_16h") or 0.0
+        snapshot_total = calibration.snapshot_total_mw.get(demand_snapshot) or 0.0
+        snapshot["hk_electric_observed_mw"] = snapshot_total
+        snapshot["load_factor"] = round(snapshot_total / peak_total, 6) if peak_total else snapshot["load_factor"]
+    return snapshot
 
 
 def _allocate_loads(
     buses: list[dict[str, Any]],
     *,
     demand_snapshot: str,
+    calibration: CalibrationBundle | None = None,
 ) -> list[dict[str, Any]]:
-    snapshot = _demand_snapshot(demand_snapshot)
+    snapshot = _demand_snapshot(demand_snapshot, calibration)
+    loads = _allocate_hk_electric_observed_loads(buses, demand_snapshot=demand_snapshot, calibration=calibration)
+    loads.extend(_allocate_synthetic_clp_loads(buses, demand_snapshot=demand_snapshot))
+    if loads:
+        return loads
     load_factor = snapshot["load_factor"]
-    loads = []
-    for territory, peak_mw in HK_PEAK_DEMAND_MW.items():
+    fallback_peak_mw = SYNTHETIC_CLP_PEAK_DEMAND_MW
+    for territory, peak_mw in {"clp": fallback_peak_mw}.items():
         eligible = [
             bus
             for bus in buses
@@ -2174,14 +2330,177 @@ def _allocate_loads(
                     "pd_mw": round(pd_mw, 3),
                     "qd_mvar": round(_reactive_mvar(pd_mw), 3),
                     "snapshot": demand_snapshot,
-                    "provenance": "public_peak_demand_scaled_voltage_weighted_substation_split",
+                    "provenance": "synthetic_missing_clp_data",
                     "allocation_method": "voltage_weighted_substation_split",
                     "load_factor": load_factor,
+                    "peak_pd_mw": round(peak_mw * weight / total_weight, 3),
                     "allocation_weight": round(weight, 6),
-                    "confidence": 0.35,
+                    "confidence": 0.2,
                 }
             )
     return loads
+
+
+def _allocate_hk_electric_observed_loads(
+    buses: list[dict[str, Any]],
+    *,
+    demand_snapshot: str,
+    calibration: CalibrationBundle | None,
+) -> list[dict[str, Any]]:
+    if calibration is None:
+        return []
+    eligible = _eligible_load_buses(buses, "hk-electric")
+    if not eligible:
+        fallback = _fallback_load_bus(buses, "hk-electric")
+        eligible = [fallback] if fallback is not None else []
+    if not eligible:
+        return []
+
+    loads: list[dict[str, Any]] = []
+    source_file = calibration.metadata.get("district_source_file")
+    for district, sectors in calibration.district_sector_gwh.items():
+        bus = _nearest_district_load_bus(eligible, district)
+        if bus is None:
+            continue
+        for sector, district_gwh in sectors.items():
+            sector_gwh = calibration.sector_gwh.get(sector, 0.0)
+            sector_snapshot_mw = calibration.snapshot_mw_by_sector.get(sector, {}).get(demand_snapshot, 0.0)
+            sector_peak_mw = calibration.peak_mw_by_sector.get(sector, 0.0)
+            if district_gwh <= 0 or sector_gwh <= 0 or sector_snapshot_mw <= 0:
+                continue
+            share = district_gwh / sector_gwh
+            pd_mw = sector_snapshot_mw * share
+            peak_pd_mw = sector_peak_mw * share
+            allocation_method = _hk_electric_allocation_method(bus)
+            loads.append(
+                {
+                    "id": f"load:hk-electric:{district}:{sector}:{bus['id']}",
+                    "bus_id": bus["id"],
+                    "service_territory": "hk-electric",
+                    "district": district,
+                    "sector": sector,
+                    "pd_mw": round(pd_mw, 3),
+                    "qd_mvar": round(_reactive_mvar(pd_mw), 3),
+                    "snapshot": demand_snapshot,
+                    "provenance": "observed_hk_electric_public_consumption",
+                    "allocation_method": allocation_method,
+                    "allocation_rule": allocation_method,
+                    "allocation_weight": round(share, 6),
+                    "load_factor": round(pd_mw / peak_pd_mw, 6) if peak_pd_mw else None,
+                    "peak_pd_mw": round(peak_pd_mw, 3),
+                    "source_file": source_file,
+                    "source_year": calibration.source_year,
+                    "source_period": "annual" if not calibration.is_partial_year else "partial_year",
+                    "source_periods": calibration.source_periods,
+                    "source_energy_gwh": round(district_gwh, 3),
+                    "geometry_provenance": "synthetic_geometry",
+                    "confidence": 0.7,
+                }
+            )
+    return loads
+
+
+def _allocate_synthetic_clp_loads(
+    buses: list[dict[str, Any]],
+    *,
+    demand_snapshot: str,
+) -> list[dict[str, Any]]:
+    load_factor = SYNTHETIC_CLP_SNAPSHOT_FACTORS[demand_snapshot]
+    territory = "clp"
+    eligible = _eligible_load_buses(buses, territory)
+    if not eligible:
+        fallback = _fallback_load_bus(buses, territory)
+        eligible = [fallback] if fallback is not None else []
+    if not eligible:
+        return []
+    weights = {bus["id"]: _load_allocation_weight(bus) for bus in eligible}
+    total_weight = sum(weights.values())
+    loads = []
+    for bus in eligible:
+        weight = weights[bus["id"]]
+        peak_pd_mw = SYNTHETIC_CLP_PEAK_DEMAND_MW * weight / total_weight
+        pd_mw = peak_pd_mw * load_factor
+        loads.append(
+            {
+                "id": f"load:{territory}:{bus['id']}",
+                "bus_id": bus["id"],
+                "service_territory": territory,
+                "pd_mw": round(pd_mw, 3),
+                "qd_mvar": round(_reactive_mvar(pd_mw), 3),
+                "snapshot": demand_snapshot,
+                "provenance": "synthetic_missing_clp_data",
+                "allocation_method": "synthetic_missing_clp_voltage_weighted_substation_split",
+                "allocation_rule": "synthetic_missing_clp_voltage_weighted_substation_split",
+                "load_factor": load_factor,
+                "peak_pd_mw": round(peak_pd_mw, 3),
+                "allocation_weight": round(weight, 6),
+                "source_file": None,
+                "source_year": None,
+                "source_period": None,
+                "confidence": 0.2,
+            }
+        )
+    return loads
+
+
+def _eligible_load_buses(buses: list[dict[str, Any]], territory: str) -> list[dict[str, Any]]:
+    voltage_bands = (
+        {"extra_high_voltage", "high_voltage", "subtransmission", "distribution"}
+        if territory == "hk-electric"
+        else {"extra_high_voltage", "high_voltage", "subtransmission"}
+    )
+    return [
+        bus
+        for bus in buses
+        if bus.get("service_territory") == territory
+        and bus.get("power") in {"substation", "sub_station"}
+        and bus.get("voltage_band") in voltage_bands
+    ]
+
+
+def _nearest_district_load_bus(eligible: list[dict[str, Any]], district: str) -> dict[str, Any] | None:
+    centroid = HK_ELECTRIC_DISTRICT_CENTROIDS.get(district)
+    if centroid is None:
+        return max(eligible, key=_load_allocation_weight, default=None)
+    with_coordinates = [
+        bus
+        for bus in eligible
+        if bus.get("lat") is not None and bus.get("lon") is not None
+    ]
+    if not with_coordinates:
+        return max(eligible, key=_load_allocation_weight, default=None)
+    return min(
+        with_coordinates,
+        key=lambda bus: (
+            _haversine_km(centroid, (float(bus["lat"]), float(bus["lon"]))),
+            -_load_allocation_weight(bus),
+        ),
+    )
+
+
+def _hk_electric_allocation_method(bus: Mapping[str, Any]) -> str:
+    if bus.get("voltage_band") in {"extra_high_voltage", "high_voltage"}:
+        return "synthetic_geometry_nearest_hv_aggregate"
+    return "synthetic_geometry_nearest_distribution_or_subtransmission"
+
+
+def _topology_calibration_metadata(calibration: CalibrationBundle | None) -> dict[str, Any] | None:
+    if calibration is None:
+        return None
+    return {
+        "source_year": calibration.source_year,
+        "source_periods": calibration.source_periods,
+        "is_partial_year": calibration.is_partial_year,
+        "territory": calibration.metadata["territory"],
+        "provenance": calibration.metadata["provenance"],
+        "observed_hk_electric_total_gwh": round(sum(calibration.sector_gwh.values()), 3),
+        "sector_gwh": calibration.sector_gwh,
+        "sector_shares": calibration.sector_shares,
+        "end_use_year": calibration.end_use_year,
+        "end_use_shares": calibration.end_use_shares,
+        "snapshot_total_mw": calibration.snapshot_total_mw,
+        "observed_inferred_synthetic_note": "HK Electric demand is observed from public CSVs; CLP demand remains synthetic_missing_clp_data.",
+    }
 
 
 def _fallback_load_bus(buses: list[dict[str, Any]], territory: str) -> dict[str, Any] | None:

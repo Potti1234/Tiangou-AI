@@ -117,6 +117,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
             params={"include_hk_interties": True, "hk_intertie_derate": 0.5},
         )
         validation_response = client.get("/grid/topology/validation")
+        calibration_response = client.get("/calibration/summary")
         summary_response = client.get(
             "/grid/topology/pipeline-summary",
             params={"include_hk_interties": True, "min_voltage_kv": 100.0},
@@ -129,6 +130,7 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert filtered_response.status_code == 200
     assert intertie_validation_response.status_code == 200
     assert validation_response.status_code == 200
+    assert calibration_response.status_code == 200
     assert summary_response.status_code == 200
     payload = preview_response.json()
     assert payload["baseMVA"] == 100.0
@@ -140,10 +142,14 @@ def test_powermodels_preview_endpoint_exports_ingested_grid(tmp_path, monkeypatc
     assert filtered_response.json()["_metadata"]["min_voltage_kv"] == 100.0
     assert intertie_validation_response.json()["metrics"]["island_count"] == 1
     validation_payload = validation_response.json()
-    assert validation_payload["status"] == "ok"
-    assert validation_payload["warnings"] == []
+    assert validation_payload["status"] == "warning"
+    assert validation_payload["warnings"][0]["code"] == "synthetic_load_share_high"
     assert validation_payload["metrics"]["severe_branch_voltage_mismatch_count"] == 0
     assert validation_payload["metrics"]["low_confidence_counts"]["load"] == 2
+    calibration_payload = calibration_response.json()
+    assert calibration_payload["source_year"] == 2025
+    assert calibration_payload["sector_gwh"]["commercial"] == 7250.0
+    assert "CLP territory demand is currently synthetic/inferred" in calibration_payload["warnings"][0]
     summary_payload = summary_response.json()
     assert summary_payload["stage_status"]["raw_osm"] == "complete"
     assert summary_payload["stage_status"]["solver_topology"] == "complete"

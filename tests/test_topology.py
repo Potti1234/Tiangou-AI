@@ -59,8 +59,10 @@ def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
 
     assert preview["metadata"]["bus_count"] == 4
     assert preview["metadata"]["branch_count"] == 2
-    assert preview["metadata"]["load_count"] == 3
+    assert preview["metadata"]["load_count"] == 17
     assert preview["metadata"]["demand_allocation_method"] == "voltage_weighted_substation_split"
+    assert preview["metadata"]["calibration"]["observed_hk_electric_total_gwh"] == 9914.0
+    assert "CLP territory demand is currently synthetic/inferred" in preview["metadata"]["calibration_warnings"][0]
     assert preview["metadata"]["circuit_class_counts"] == {"inter_facility": 1, "isolated": 1}
     assert preview["metadata"]["circuit_candidate_count"] == 2
     assert preview["metadata"]["circuit_count_total"] == 3
@@ -85,7 +87,7 @@ def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
     territories = {load["service_territory"] for load in preview["loads"]}
     assert territories == {"clp", "hk-electric"}
     clp_loads = {load["bus_id"]: load for load in preview["loads"] if load["service_territory"] == "clp"}
-    assert clp_loads["osm:node:1"]["allocation_method"] == "voltage_weighted_substation_split"
+    assert clp_loads["osm:node:1"]["allocation_method"] == "synthetic_missing_clp_voltage_weighted_substation_split"
     assert clp_loads["osm:node:1"]["allocation_weight"] == 3.0
     assert clp_loads["osm:node:2"]["allocation_weight"] == 2.0
     assert clp_loads["osm:node:1"]["pd_mw"] == 4401.6
@@ -363,7 +365,7 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
 
     assert case["baseMVA"] == 100.0
     assert set(case) >= {"bus", "branch", "gen", "load", "shunt"}
-    assert case["_metadata"]["total_pd_mw"] == 9591.0
+    assert case["_metadata"]["total_pd_mw"] == 9415.203
     assert case["_metadata"]["gen_count"] == 2
     assert case["_metadata"]["reference_bus_count"] == 2
     assert case["_metadata"]["demand_allocation_method"] == "voltage_weighted_substation_split"
@@ -425,12 +427,20 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert case["_metadata"]["parameter_lookup_tables"]["overhead_line_voltage_kv"] == [33.0, 110.0, 132.0, 220.0, 275.0, 400.0]
     assert case["_metadata"]["parameter_lookup_tables"]["underground_cable_voltage_kv"] == [33.0, 110.0, 132.0, 220.0, 275.0, 400.0]
     assert case["_metadata"]["parameter_lookup_tables"]["load_power_factor"] == 0.95
-    assert all(load["provenance"] == "public_peak_demand_scaled_voltage_weighted_substation_split" for load in case["load"].values())
-    assert all(load["allocation_method"] == "voltage_weighted_substation_split" for load in case["load"].values())
+    assert case["_metadata"]["calibration"]["snapshot_total_mw"]["peak_16h"] == 2079.201
+    assert {load["provenance"] for load in case["load"].values()} == {
+        "observed_hk_electric_public_consumption",
+        "synthetic_missing_clp_data",
+    }
+    assert all(load["allocation_method"] for load in case["load"].values())
     assert case["_metadata"]["provenance_summary"]["branch"] == {"osm_with_inferred_parameters": 1}
     assert case["_metadata"]["provenance_summary"]["gen"] == {"public_peak_demand_capacity_equivalent": 2}
-    assert sum(load["pd"] for load in case["load"].values()) == 95.91
-    assert sum(gen["pmax"] for gen in case["gen"].values()) > 95.91
+    assert case["_metadata"]["provenance_summary"]["load"] == {
+        "observed_hk_electric_public_consumption": 15,
+        "synthetic_missing_clp_data": 2,
+    }
+    assert sum(load["pd"] for load in case["load"].values()) == 94.15203
+    assert sum(gen["pmax"] for gen in case["gen"].values()) > 94.15203
 
 
 def test_powermodels_preview_exports_overnight_snapshot() -> None:
@@ -442,9 +452,9 @@ def test_powermodels_preview_exports_overnight_snapshot() -> None:
     )
 
     assert overnight_case["demand_snapshot"] == "overnight_04h"
-    assert overnight_case["_metadata"]["load_factor"] == 0.55
-    assert overnight_case["_metadata"]["total_pd_mw"] == 5275.05
-    assert sum(load["pd"] for load in overnight_case["load"].values()) == 52.7505
+    assert overnight_case["_metadata"]["load_factor"] == 0.401741
+    assert overnight_case["_metadata"]["total_pd_mw"] == 4870.101
+    assert sum(load["pd"] for load in overnight_case["load"].values()) == 48.70101
     assert sum(gen["pmax"] for gen in overnight_case["gen"].values()) == sum(
         gen["pmax"] for gen in peak_case["gen"].values()
     )
@@ -463,11 +473,11 @@ def test_powermodels_preview_exports_shoulder_and_cooling_snapshots() -> None:
     )
 
     assert shoulder_case["demand_snapshot"] == "shoulder_10h"
-    assert shoulder_case["_metadata"]["load_factor"] == 0.75
-    assert shoulder_case["_metadata"]["total_pd_mw"] == 7193.25
+    assert shoulder_case["_metadata"]["load_factor"] == 0.79314
+    assert shoulder_case["_metadata"]["total_pd_mw"] == 7151.096
     assert cooling_case["demand_snapshot"] == "cooling_peak_18h"
-    assert cooling_case["_metadata"]["load_factor"] == 1.12
-    assert cooling_case["_metadata"]["total_pd_mw"] == 10741.92
+    assert cooling_case["_metadata"]["load_factor"] == 1.19244
+    assert cooling_case["_metadata"]["total_pd_mw"] == 10695.643
 
 
 def test_topology_preview_can_filter_known_low_voltage_assets() -> None:
@@ -902,18 +912,27 @@ def test_powermodels_validation_reports_islands_and_capacity() -> None:
 
     validation = validate_powermodels_case(case)
 
-    assert validation["status"] == "ok"
+    assert validation["status"] == "warning"
     assert validation["metrics"]["island_count"] == 2
-    assert validation["metrics"]["total_pd_mw"] == 9591.0
-    assert validation["metrics"]["low_confidence_counts"] == {"branch": 0, "bus": 1, "gen": 2, "load": 3}
+    assert validation["metrics"]["total_pd_mw"] == 9415.203
+    assert validation["metrics"]["low_confidence_counts"] == {"branch": 0, "bus": 1, "gen": 2, "load": 2}
     assert validation["metrics"]["branch_voltage_mismatch_count"] == 0
     assert validation["metrics"]["severe_branch_voltage_mismatch_count"] == 0
     assert validation["metrics"]["provenance_summary"]["load"] == {
-        "public_peak_demand_scaled_voltage_weighted_substation_split": 3
+        "observed_hk_electric_public_consumption": 15,
+        "synthetic_missing_clp_data": 2,
     }
+    assert validation["metrics"]["calibration"]["hk_electric_territory"]["status"] == "pass"
+    assert validation["metrics"]["calibration"]["load_provenance_class_share"]["synthetic"] == 0.779165
     assert validation["voltage_mismatches"] == []
     assert validation["errors"] == []
-    assert validation["warnings"] == []
+    assert validation["warnings"] == [
+        {
+            "code": "synthetic_load_share_high",
+            "message": "More than 50 percent of modeled load is synthetic.",
+            "synthetic_load_share": 0.779165,
+        }
+    ]
     assert all(island["reference_bus_count"] == 1 for island in validation["islands"])
 
 

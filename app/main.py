@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.data_sources import load_calibration_bundle
 from app.database import get_db, init_db
 from app.overpass import OverpassClient, OverpassError, build_power_query
 from app.regions import REGIONS, get_region
@@ -95,6 +96,14 @@ def _handoff_artifact_summary() -> dict[str, Any]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/calibration/summary")
+def calibration_summary(year: int | None = None) -> dict[str, Any]:
+    try:
+        return load_calibration_bundle(Path("data/raw"), year=year).to_dict()
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/regions")
