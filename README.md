@@ -130,3 +130,4 @@ This preview uses OSM geometry, voltage-class impedance and charging defaults, p
 Exported buses, branches, loads, and generators retain `provenance` and `confidence` annotations, with aggregate counts in `_metadata.provenance_summary`, so inferred values can be audited before scenario generation.
 Demand is allocated within each service territory using a voltage-weighted substation proxy and a 0.95 assumed load power factor while preserving the public CLP/HK Electric snapshot totals.
 Generators also carry `energy_source`, `resource_type`, and `cost_class` metadata so tagged local plants and territory-level capacity equivalents remain distinguishable after export.
+For solver handoff, passive disconnected components are pruned and every load-bearing island receives an equivalent capacity source to avoid unsupplied islands from sparse OSM topology.

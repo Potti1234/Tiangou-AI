@@ -437,15 +437,24 @@ def build_powermodels_validation(
 
 
 def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, Any]:
-    buses = list(topology["buses"])
-    branches = [
+    raw_buses = list(topology["buses"])
+    raw_branches = [
         branch
         for branch in topology["branches"]
         if branch.get("from_bus_id") and branch.get("to_bus_id") and branch.get("from_bus_id") != branch.get("to_bus_id")
     ]
-    loads = list(topology["loads"])
+    raw_loads = list(topology["loads"])
     tagged_generators = _tagged_generators(topology.get("generators", []))
-    equivalent_generators = _equivalent_generators(buses, loads)
+    active_bus_ids = _active_preview_bus_ids(raw_buses, raw_branches, raw_loads, tagged_generators)
+    buses = [bus for bus in raw_buses if bus["id"] in active_bus_ids]
+    branches = [
+        branch
+        for branch in raw_branches
+        if branch["from_bus_id"] in active_bus_ids and branch["to_bus_id"] in active_bus_ids
+    ]
+    loads = [load for load in raw_loads if load["bus_id"] in active_bus_ids]
+    tagged_generators = [generator for generator in tagged_generators if generator["bus_id"] in active_bus_ids]
+    equivalent_generators = _equivalent_generators(buses, branches, loads)
     all_generators = [*tagged_generators, *equivalent_generators]
 
     bus_id_map = {bus["id"]: str(index) for index, bus in enumerate(buses, start=1)}
@@ -458,6 +467,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
         bus_number = bus_id_map[bus["id"]]
         bus_type = _powermodels_bus_type(bus["id"], reference_bus_ids, gen_bus_ids, load_bus_ids)
         bus_dict[bus_number] = {
+            "index": int(bus_number),
             "bus_i": int(bus_number),
             "bus_type": bus_type,
             "type": bus_type,
@@ -554,6 +564,8 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "branch_count": len(branch_dict),
             "load_count": len(load_dict),
             "gen_count": len(gen_dict),
+            "dropped_passive_bus_count": len(raw_buses) - len(buses),
+            "dropped_passive_branch_count": len(raw_branches) - len(branches),
             "tagged_gen_count": len(tagged_generators),
             "equivalent_gen_count": len(equivalent_generators),
             "reference_bus_count": len(reference_bus_ids),
@@ -575,6 +587,24 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
     }
 
 
+def _active_preview_bus_ids(
+    buses: list[dict[str, Any]],
+    branches: list[Mapping[str, Any]],
+    loads: list[dict[str, Any]],
+    tagged_generators: list[dict[str, Any]],
+) -> set[str]:
+    seed_bus_ids = {load["bus_id"] for load in loads}
+    seed_bus_ids.update(generator["bus_id"] for generator in tagged_generators)
+    if not seed_bus_ids:
+        return {bus["id"] for bus in buses}
+
+    active_bus_ids: set[str] = set()
+    for component in _preview_components(buses, branches):
+        if component & seed_bus_ids:
+            active_bus_ids.update(component)
+    return active_bus_ids
+
+
 def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
     errors: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
@@ -593,7 +623,7 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
     bus_ids = {int(bus["bus_i"]) for bus in buses.values() if "bus_i" in bus}
     for bus_id, bus in buses.items():
         missing_fields = []
-        for field in ("bus_i", "bus_type", "base_kv", "vmin", "vmax", "vm", "va"):
+        for field in ("index", "bus_i", "bus_type", "base_kv", "vmin", "vmax", "vm", "va"):
             if field not in bus:
                 errors.append({"code": "bus_missing_field", "message": "Bus is missing a required PowerModels field.", "bus_id": bus_id, "field": field})
                 missing_fields.append(field)
@@ -604,7 +634,7 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
 
     for branch_id, branch in branches.items():
         missing_fields = []
-        for field in ("f_bus", "t_bus", "br_r", "br_x", "rate_a", "angmin", "angmax", "br_status"):
+        for field in ("f_bus", "t_bus", "br_r", "br_x", "g_fr", "g_to", "b_fr", "b_to", "rate_a", "angmin", "angmax", "br_status"):
             if field not in branch:
                 errors.append({"code": "branch_missing_field", "message": "Branch is missing a required PowerModels field.", "branch_id": branch_id, "field": field})
                 missing_fields.append(field)
@@ -938,6 +968,8 @@ def _powermodels_branch(
         "t_bus": int(bus_id_map[str(branch["to_bus_id"])]),
         "br_r": round(max(r_ohm / z_base_ohm, 0.00001), 8),
         "br_x": round(max(x_ohm / z_base_ohm, 0.00001), 8),
+        "g_fr": 0.0,
+        "g_to": 0.0,
         "b_fr": charging_pu,
         "b_to": charging_pu,
         "rate_a": defaults.get("rate_mva") or 100.0,
@@ -1128,23 +1160,34 @@ def _equivalent_generator_cost_class(territory: str) -> str:
 
 def _equivalent_generators(
     buses: list[dict[str, Any]],
+    branches: list[Mapping[str, Any]],
     loads: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    loads_by_territory: dict[str, float] = {}
+    load_by_bus_id: dict[str, list[dict[str, Any]]] = {}
     for load in loads:
-        territory = load["service_territory"]
-        loads_by_territory[territory] = loads_by_territory.get(territory, 0.0) + load["pd_mw"]
+        load_by_bus_id.setdefault(load["bus_id"], []).append(load)
 
+    components = _preview_components(buses, branches)
     generators = []
-    for territory, pd_mw in sorted(loads_by_territory.items()):
-        bus = _best_generator_bus(buses, territory)
+    for index, component in enumerate(components, start=1):
+        component_loads = [
+            load
+            for bus_id in component
+            for load in load_by_bus_id.get(bus_id, [])
+        ]
+        if not component_loads:
+            continue
+
+        peak_equivalent_pd_mw = sum(load["pd_mw"] / (load.get("load_factor") or 1.0) for load in component_loads)
+        territory = _dominant_load_territory(component_loads)
+        component_buses = [bus for bus in buses if bus["id"] in component]
+        bus = _best_generator_bus(component_buses, territory)
         if bus is None:
             continue
-        capacity_anchor_mw = HK_PEAK_DEMAND_MW.get(territory, pd_mw)
-        pmax_mw = max(capacity_anchor_mw * 1.25, 100.0)
+        pmax_mw = max(peak_equivalent_pd_mw * 1.25, 100.0)
         generators.append(
             {
-                "id": f"equivalent_gen:{territory}",
+                "id": f"equivalent_gen:{territory}:island:{index}",
                 "bus_id": bus["id"],
                 "service_territory": territory,
                 "pmax_mw": pmax_mw,
@@ -1174,6 +1217,44 @@ def _equivalent_generators(
             }
         )
     return generators
+
+
+def _preview_components(
+    buses: list[dict[str, Any]],
+    branches: list[Mapping[str, Any]],
+) -> list[set[str]]:
+    adjacency: dict[str, set[str]] = {bus["id"]: set() for bus in buses}
+    for branch in branches:
+        from_bus_id = branch.get("from_bus_id")
+        to_bus_id = branch.get("to_bus_id")
+        if from_bus_id in adjacency and to_bus_id in adjacency:
+            adjacency[str(from_bus_id)].add(str(to_bus_id))
+            adjacency[str(to_bus_id)].add(str(from_bus_id))
+
+    components = []
+    seen: set[str] = set()
+    for bus_id in sorted(adjacency):
+        if bus_id in seen:
+            continue
+        stack = [bus_id]
+        component: set[str] = set()
+        while stack:
+            current = stack.pop()
+            if current in component:
+                continue
+            component.add(current)
+            stack.extend(adjacency[current] - component)
+        seen.update(component)
+        components.append(component)
+    return components
+
+
+def _dominant_load_territory(loads: list[dict[str, Any]]) -> str:
+    totals: dict[str, float] = {}
+    for load in loads:
+        territory = load["service_territory"]
+        totals[territory] = totals.get(territory, 0.0) + load["pd_mw"]
+    return max(sorted(totals), key=lambda territory: totals[territory])
 
 
 def _count_by(items: Iterable[Mapping[str, Any]], key: str) -> dict[str, int]:

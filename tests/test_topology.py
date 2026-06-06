@@ -63,10 +63,13 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert case["_metadata"]["load_power_factor"] == 0.95
 
     assert sorted(case["bus"]) == ["1", "2", "3", "4"]
+    assert all(bus["index"] == bus["bus_i"] for bus in case["bus"].values())
     assert sum(1 for bus in case["bus"].values() if bus["bus_type"] == 3) == 2
     assert all(bus["type"] == bus["bus_type"] for bus in case["bus"].values())
     assert all(branch["br_r"] > 0 for branch in case["branch"].values())
     assert all(branch["br_x"] > 0 for branch in case["branch"].values())
+    assert all(branch["g_fr"] == 0.0 for branch in case["branch"].values())
+    assert all(branch["g_to"] == 0.0 for branch in case["branch"].values())
     assert all(branch["b_fr"] > 0 for branch in case["branch"].values())
     assert all(branch["b_to"] > 0 for branch in case["branch"].values())
     assert all(branch["b_us_per_km"] > 0 for branch in case["branch"].values())
@@ -215,6 +218,72 @@ def test_powermodels_preview_exports_tagged_generator_capacity() -> None:
     assert tagged_export["energy_source"] == "gas"
     assert tagged_export["resource_type"] == "local_osm_generator"
     assert tagged_export["cost_class"] == "thermal_gas"
+
+
+def test_powermodels_preview_adds_equivalent_generator_per_load_island() -> None:
+    rows = [
+        *_sample_rows(),
+        {
+            "osm_type": "node",
+            "osm_id": 70,
+            "power": "substation",
+            "name": "CLP Remote Island",
+            "voltage": "132000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.45,
+            "lon": 114.25,
+            "tags_json": '{"operator": "CLP Power", "voltage": "132000"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+    ]
+
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+    validation = validate_powermodels_case(case)
+
+    equivalent_gens = [
+        generator
+        for generator in case["gen"].values()
+        if generator["resource_type"] == "territory_capacity_equivalent"
+    ]
+    assert len(equivalent_gens) == 3
+    assert validation["metrics"]["island_count"] == 3
+    assert "load_island_without_generation" not in {error["code"] for error in validation["errors"]}
+
+
+def test_powermodels_preview_drops_passive_components_from_solver_case() -> None:
+    rows = [
+        *_sample_rows(),
+        {
+            "osm_type": "node",
+            "osm_id": 80,
+            "power": "terminal",
+            "name": "Passive Terminal",
+            "voltage": "132000",
+            "operator": None,
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.50,
+            "lon": 114.30,
+            "tags_json": '{"voltage": "132000"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+    ]
+
+    topology = build_topology_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+
+    assert topology["metadata"]["bus_count"] == 5
+    assert case["_metadata"]["bus_count"] == 4
+    assert case["_metadata"]["dropped_passive_bus_count"] == 1
+    assert all(bus["source_id"] != "osm:node:80" for bus in case["bus"].values())
 
 
 def test_powermodels_preview_can_include_hk_intertie() -> None:
