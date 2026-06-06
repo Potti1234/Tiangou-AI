@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.database import connect, init_db
+from app.export_load_allocation import export_hk_electric_load_allocation
 from app.export_powermodels import export_hong_kong_phase1_bundle, export_powermodels_case
 from app.repository import create_ingest_run, upsert_elements
 
@@ -26,6 +27,41 @@ def test_export_powermodels_case_writes_json(tmp_path) -> None:
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["baseMVA"] == 100.0
     assert payload["_metadata"]["total_pd_mw"] == 7336.0
+
+
+def test_export_hk_electric_load_allocation_writes_provenance_artifact(tmp_path) -> None:
+    db_path = tmp_path / "grid.sqlite3"
+    output_path = tmp_path / "load_allocation" / "hk_electric_loads.json"
+    _seed_grid(db_path)
+    _seed_hk_electric_bus(db_path)
+
+    result = export_hk_electric_load_allocation(
+        database_path=db_path,
+        output_path=output_path,
+        snap_tolerance_km=0.2,
+    )
+
+    assert result["load_count"] == 15
+    assert result["total_source_energy_gwh"] == 9914.0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["schema"] == "tiangou.hk_electric_load_allocation.v1"
+    assert payload["metadata"]["calibration"]["observed_hk_electric_total_gwh"] == 9914.0
+    assert payload["metadata"]["total_pd_mw"] == 2079.203
+    assert len(payload["loads"]) == 15
+    assert {
+        "bus_id",
+        "district",
+        "sector",
+        "snapshot",
+        "pd_mw",
+        "qd_mvar",
+        "source_file",
+        "source_year",
+        "source_period",
+        "provenance",
+        "allocation_rule",
+    } <= set(payload["loads"][0])
+    assert {load["provenance"] for load in payload["loads"]} == {"observed_hk_electric_public_consumption"}
 
 
 def test_export_powermodels_case_writes_overnight_snapshot(tmp_path) -> None:
