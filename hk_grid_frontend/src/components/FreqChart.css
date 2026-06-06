@@ -1,0 +1,8 @@
+.freq-chart {
+  width: 100%;
+}
+.freq-chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
