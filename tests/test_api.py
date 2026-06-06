@@ -1,0 +1,47 @@
+from fastapi.testclient import TestClient
+
+from app import main
+from app.config import settings
+
+
+def test_health_initializes_database(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", tmp_path / "api.sqlite3")
+
+    with TestClient(main.app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert settings.database_path.exists()
+
+
+def test_ingest_endpoint_stores_mocked_overpass_elements(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", tmp_path / "api.sqlite3")
+
+    async def fake_fetch(self, query: str):
+        return {
+            "elements": [
+                {
+                    "type": "node",
+                    "id": 1,
+                    "lat": 22.31,
+                    "lon": 114.17,
+                    "tags": {"power": "substation", "name": "Mock Substation"},
+                },
+                {"type": "node", "id": 2, "tags": {"amenity": "cafe"}},
+            ]
+        }
+
+    monkeypatch.setattr(main.OverpassClient, "fetch", fake_fetch)
+
+    with TestClient(main.app) as client:
+        ingest_response = client.post("/ingest/hong-kong")
+        assets_response = client.get("/grid/assets", params={"region_key": "hong-kong"})
+        detail_response = client.get("/grid/assets/node/1")
+
+    assert ingest_response.status_code == 200
+    assert ingest_response.json()["stored_count"] == 1
+    assert assets_response.status_code == 200
+    assert assets_response.json()[0]["name"] == "Mock Substation"
+    assert detail_response.status_code == 200
+    assert detail_response.json()["tags"]["power"] == "substation"
