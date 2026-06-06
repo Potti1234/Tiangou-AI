@@ -80,9 +80,56 @@ def export_hong_kong_phase1_bundle(
         "hk_intertie_derate": hk_intertie_derate,
         "exports": exports,
     }
+    manifest["solver_handoff"] = _write_solver_handoff(output_dir, exports)
     manifest_path = output_dir / "hong_kong_phase1_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     return {**manifest, "manifest_path": str(manifest_path)}
+
+
+def _write_solver_handoff(output_dir: Path, exports: list[dict[str, Any]]) -> dict[str, Any]:
+    solvable_paths = [
+        str(Path(export["output_path"]).with_suffix("").with_suffix(".solvable.json"))
+        for export in exports
+    ]
+    pyg_paths = [
+        str(Path(export["output_path"]).with_suffix("").with_suffix(".pyg.json"))
+        for export in exports
+    ]
+
+    grids_solvable_path = output_dir / "grids_solvable.txt"
+    grids_solvable_path.write_text("\n".join(solvable_paths) + "\n", encoding="utf-8")
+
+    script_path = output_dir / "run_hong_kong_solver_pipeline.ps1"
+    lines = [
+        "param(",
+        '    [string]$SolverPipeline = "..\\GridSFM\\power_grid\\US\\topology_solver_pipeline"',
+        ")",
+        "$ErrorActionPreference = 'Stop'",
+        "",
+    ]
+    for export, solvable_path, pyg_path in zip(exports, solvable_paths, pyg_paths, strict=True):
+        raw_path = export["output_path"]
+        lines.extend(
+            [
+                f'julia --project="$SolverPipeline" "$SolverPipeline\\solve_topo_json.jl" "{raw_path}" "{solvable_path}"',
+                f'julia --project="$SolverPipeline" "$SolverPipeline\\export_gridsfm_data.jl" "{solvable_path}" "{pyg_path}"',
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            f'julia --project="$SolverPipeline" "$SolverPipeline\\gen_perturbed_data.jl" "{grids_solvable_path}" 1 "{output_dir / "scenarios"}"',
+            "",
+        ]
+    )
+    script_path.write_text("\n".join(lines), encoding="utf-8")
+
+    return {
+        "script_path": str(script_path),
+        "grids_solvable_path": str(grids_solvable_path),
+        "solvable_paths": solvable_paths,
+        "pyg_paths": pyg_paths,
+    }
 
 
 def main() -> None:

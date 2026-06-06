@@ -94,4 +94,10 @@ Write both Phase 1 Hong Kong snapshots plus a manifest:
 python -m app.export_powermodels data/processed --hong-kong-phase1-bundle --include-hk-interties
 ```
 
+The bundle also writes `run_hong_kong_solver_pipeline.ps1` and `grids_solvable.txt` for the downstream Julia solve/export/scenario steps. Pass the cloned solver path when running it if needed:
+
+```powershell
+.\data\processed\run_hong_kong_solver_pipeline.ps1 -SolverPipeline "..\GridSFM\power_grid\US\topology_solver_pipeline"
+```
+
 This preview uses OSM geometry, voltage-class impedance defaults, public Hong Kong peak-demand anchors, and territory-level equivalent generators. Treat it as an upstream topology-builder artifact for the Julia relaxation/export pipeline, not as an operational grid model.

@@ -60,9 +60,13 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     peak_path = output_dir / "hong_kong_16h_model.json"
     overnight_path = output_dir / "hong_kong_04h_model.json"
     manifest_path = output_dir / "hong_kong_phase1_manifest.json"
+    handoff_path = output_dir / "run_hong_kong_solver_pipeline.ps1"
+    grids_solvable_path = output_dir / "grids_solvable.txt"
     assert peak_path.exists()
     assert overnight_path.exists()
     assert manifest_path.exists()
+    assert handoff_path.exists()
+    assert grids_solvable_path.exists()
     assert result["include_hk_interties"] is True
     assert result["hk_intertie_derate"] == 0.5
     assert len(result["exports"]) == 2
@@ -74,6 +78,14 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert overnight["demand_snapshot"] == "overnight_04h"
     assert peak["_metadata"]["include_hk_interties"] is True
     assert peak["_metadata"]["hk_intertie_derate"] == 0.5
+    assert "solve_topo_json.jl" in handoff_path.read_text(encoding="utf-8")
+    assert "gen_perturbed_data.jl" in handoff_path.read_text(encoding="utf-8")
+    assert grids_solvable_path.read_text(encoding="utf-8").splitlines() == [
+        str(output_dir / "hong_kong_16h_model.solvable.json"),
+        str(output_dir / "hong_kong_04h_model.solvable.json"),
+    ]
+    assert manifest["solver_handoff"]["script_path"] == str(handoff_path)
+    assert manifest["solver_handoff"]["grids_solvable_path"] == str(grids_solvable_path)
     assert manifest["exports"][0]["validation"]["status"] == "ok"
 
 
