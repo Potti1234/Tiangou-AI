@@ -45,9 +45,13 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert case["_metadata"]["gen_count"] == 2
 
     assert sorted(case["bus"]) == ["1", "2", "3", "4"]
-    assert any(bus["type"] == 3 for bus in case["bus"].values())
+    assert any(bus["bus_type"] == 3 for bus in case["bus"].values())
+    assert all(bus["type"] == bus["bus_type"] for bus in case["bus"].values())
     assert all(branch["br_r"] > 0 for branch in case["branch"].values())
     assert all(branch["br_x"] > 0 for branch in case["branch"].values())
+    assert all(generator["model"] == 2 for generator in case["gen"].values())
+    assert all(generator["ncost"] == 3 for generator in case["gen"].values())
+    assert all(len(generator["cost"]) == 3 for generator in case["gen"].values())
     assert sum(load["pd"] for load in case["load"].values()) == 95.91
     assert sum(gen["pmax"] for gen in case["gen"].values()) > 95.91
 
@@ -74,6 +78,31 @@ def test_powermodels_validation_rejects_load_island_without_generation() -> None
     assert "no_generators" in error_codes
     assert "generation_capacity_shortfall" in error_codes
     assert "load_island_without_generation" in error_codes
+
+
+def test_powermodels_validation_requires_native_bus_type() -> None:
+    case = build_powermodels_preview(_sample_rows(), snap_tolerance_km=0.2)
+    del case["bus"]["1"]["bus_type"]
+
+    validation = validate_powermodels_case(case)
+
+    assert validation["status"] == "error"
+    assert {
+        "code": "bus_missing_field",
+        "message": "Bus is missing a required PowerModels field.",
+        "bus_id": "1",
+        "field": "bus_type",
+    } in validation["errors"]
+
+
+def test_powermodels_validation_requires_quadratic_generator_cost() -> None:
+    case = build_powermodels_preview(_sample_rows(), snap_tolerance_km=0.2)
+    case["gen"]["1"]["model"] = 1
+
+    validation = validate_powermodels_case(case)
+
+    assert validation["status"] == "error"
+    assert "gen_invalid_polynomial_cost" in {error["code"] for error in validation["errors"]}
 
 
 def _sample_rows() -> list[dict[str, object]]:

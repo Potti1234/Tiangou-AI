@@ -351,14 +351,17 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
     bus_dict = {}
     for bus in buses:
         bus_number = bus_id_map[bus["id"]]
+        bus_type = _powermodels_bus_type(bus["id"], reference_bus_id, gen_bus_ids, load_bus_ids)
         bus_dict[bus_number] = {
             "bus_i": int(bus_number),
-            "type": _powermodels_bus_type(bus["id"], reference_bus_id, gen_bus_ids, load_bus_ids),
+            "bus_type": bus_type,
+            "type": bus_type,
             "base_kv": bus.get("base_kv") or 132.0,
             "vmin": 0.9,
             "vmax": 1.1,
             "vm": 1.0,
             "va": 0.0,
+            "area": 1,
             "zone": 1,
             "source_id": bus["id"],
         }
@@ -382,6 +385,7 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
     for index, generator in enumerate(_equivalent_generators(buses, loads), start=1):
         gen_dict[str(index)] = {
             "index": index,
+            "source_id": generator["id"],
             "gen_bus": int(bus_id_map[generator["bus_id"]]),
             "pg": 0.0,
             "qg": 0.0,
@@ -395,7 +399,6 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "model": 2,
             "ncost": 3,
             "cost": generator["cost"],
-            "source_id": generator["id"],
         }
 
     return {
@@ -442,8 +445,26 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
     if not branches:
         warnings.append({"code": "no_branches", "message": "Case has no branches; solver handoff will be a single-bus equivalent at best."})
 
-    bus_ids = {int(bus["bus_i"]) for bus in buses.values()}
+    bus_ids = {int(bus["bus_i"]) for bus in buses.values() if "bus_i" in bus}
+    for bus_id, bus in buses.items():
+        missing_fields = []
+        for field in ("bus_i", "bus_type", "base_kv", "vmin", "vmax", "vm", "va"):
+            if field not in bus:
+                errors.append({"code": "bus_missing_field", "message": "Bus is missing a required PowerModels field.", "bus_id": bus_id, "field": field})
+                missing_fields.append(field)
+        if missing_fields:
+            continue
+        if "bus_type" in bus and int(bus["bus_type"]) not in {1, 2, 3, 4}:
+            errors.append({"code": "bus_invalid_type", "message": "Bus has an invalid PowerModels bus_type.", "bus_id": bus_id})
+
     for branch_id, branch in branches.items():
+        missing_fields = []
+        for field in ("f_bus", "t_bus", "br_r", "br_x", "rate_a", "angmin", "angmax", "br_status"):
+            if field not in branch:
+                errors.append({"code": "branch_missing_field", "message": "Branch is missing a required PowerModels field.", "branch_id": branch_id, "field": field})
+                missing_fields.append(field)
+        if missing_fields:
+            continue
         if branch["f_bus"] not in bus_ids or branch["t_bus"] not in bus_ids:
             errors.append({"code": "branch_missing_bus", "message": "Branch references an unknown bus.", "branch_id": branch_id})
         if branch["br_r"] <= 0 or branch["br_x"] <= 0:
@@ -452,16 +473,32 @@ def validate_powermodels_case(case: Mapping[str, Any]) -> dict[str, Any]:
             errors.append({"code": "branch_nonpositive_rating", "message": "Branch has nonpositive thermal rating.", "branch_id": branch_id})
 
     for load_id, load in loads.items():
+        missing_fields = []
+        for field in ("load_bus", "pd", "qd", "status"):
+            if field not in load:
+                errors.append({"code": "load_missing_field", "message": "Load is missing a required PowerModels field.", "load_id": load_id, "field": field})
+                missing_fields.append(field)
+        if missing_fields:
+            continue
         if load["load_bus"] not in bus_ids:
             errors.append({"code": "load_missing_bus", "message": "Load references an unknown bus.", "load_id": load_id})
         if load["pd"] < 0 or load["qd"] < 0:
             errors.append({"code": "load_negative_demand", "message": "Load has negative demand.", "load_id": load_id})
 
     for gen_id, generator in generators.items():
+        missing_fields = []
+        for field in ("gen_bus", "pg", "qg", "pmin", "pmax", "qmin", "qmax", "vg", "mbase", "gen_status", "model", "ncost", "cost"):
+            if field not in generator:
+                errors.append({"code": "gen_missing_field", "message": "Generator is missing a required PowerModels field.", "gen_id": gen_id, "field": field})
+                missing_fields.append(field)
+        if missing_fields:
+            continue
         if generator["gen_bus"] not in bus_ids:
             errors.append({"code": "gen_missing_bus", "message": "Generator references an unknown bus.", "gen_id": gen_id})
         if generator["pmax"] <= 0 or generator["pmax"] < generator["pmin"]:
             errors.append({"code": "gen_invalid_capacity", "message": "Generator has invalid active-power limits.", "gen_id": gen_id})
+        if generator["model"] != 2 or generator["ncost"] != 3 or len(generator["cost"]) != 3:
+            errors.append({"code": "gen_invalid_polynomial_cost", "message": "Generator must use a quadratic polynomial cost for GridSFM export.", "gen_id": gen_id})
 
     total_pd = sum(load["pd"] for load in loads.values())
     total_pmax = sum(generator["pmax"] for generator in generators.values())
