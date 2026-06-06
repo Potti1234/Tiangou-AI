@@ -703,10 +703,15 @@ def build_powermodels_validation(
 
 def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, Any]:
     raw_buses = list(topology["buses"])
-    raw_branches = [
+    raw_branch_candidates = [
         branch
         for branch in topology["branches"]
         if branch.get("from_bus_id") and branch.get("to_bus_id") and branch.get("from_bus_id") != branch.get("to_bus_id")
+    ]
+    raw_branches = [
+        branch
+        for branch in raw_branch_candidates
+        if branch.get("circuit_class") == "inter_facility"
     ]
     raw_loads = list(topology["loads"])
     tagged_generators = _tagged_generators(topology.get("generators", []))
@@ -835,11 +840,13 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "load_count": len(load_dict),
             "gen_count": len(gen_dict),
             "raw_bus_count": len(raw_buses),
-            "raw_branch_count": len(raw_branches),
+            "raw_branch_count": len(raw_branch_candidates),
+            "raw_solver_candidate_branch_count": len(raw_branches),
             "retained_bus_count": len(buses),
             "retained_branch_count": len(branches),
             "dropped_passive_bus_count": len(raw_buses) - len(buses),
             "dropped_passive_branch_count": len(raw_branches) - len(branches),
+            "dropped_non_interfacility_branch_count": len(raw_branch_candidates) - len(raw_branches),
             "dropped_no_load_generation_island_count": active_selection["dropped_no_load_generation_island_count"],
             "dropped_no_load_generation_bus_count": active_selection["dropped_no_load_generation_bus_count"],
             "dropped_no_load_generation_pmax_mw": active_selection["dropped_no_load_generation_pmax_mw"],
@@ -853,11 +860,13 @@ def topology_preview_to_powermodels(topology: Mapping[str, Any]) -> dict[str, An
             "largest_component_pmax_share": component_metadata["largest_component_pmax_share"],
             "cleanup_summary": {
                 "raw_bus_count": len(raw_buses),
-                "raw_branch_count": len(raw_branches),
+                "raw_branch_count": len(raw_branch_candidates),
+                "raw_solver_candidate_branch_count": len(raw_branches),
                 "retained_bus_count": len(buses),
                 "retained_branch_count": len(branches),
                 "dropped_passive_bus_count": len(raw_buses) - len(buses),
                 "dropped_passive_branch_count": len(raw_branches) - len(branches),
+                "dropped_non_interfacility_branch_count": len(raw_branch_candidates) - len(raw_branches),
                 "dropped_no_load_generation_island_count": active_selection["dropped_no_load_generation_island_count"],
                 "dropped_no_load_generation_bus_count": active_selection["dropped_no_load_generation_bus_count"],
                 "dropped_no_load_generation_pmax_mw": active_selection["dropped_no_load_generation_pmax_mw"],
@@ -1962,9 +1971,12 @@ def _allocate_loads(
             bus
             for bus in buses
             if bus.get("service_territory") == territory
-            and bus.get("power") in {"substation", "sub_station", "inferred_terminal"}
+            and bus.get("power") in {"substation", "sub_station"}
             and bus.get("voltage_band") in {"extra_high_voltage", "high_voltage", "subtransmission"}
         ]
+        if not eligible:
+            fallback = _fallback_load_bus(buses, territory)
+            eligible = [fallback] if fallback is not None else []
         if not eligible:
             continue
         weights = {bus["id"]: _load_allocation_weight(bus) for bus in eligible}
@@ -1988,6 +2000,19 @@ def _allocate_loads(
                 }
             )
     return loads
+
+
+def _fallback_load_bus(buses: list[dict[str, Any]], territory: str) -> dict[str, Any] | None:
+    candidates = [
+        bus
+        for bus in buses
+        if bus.get("service_territory") == territory
+        and bus.get("power") == "inferred_terminal"
+        and bus.get("voltage_band") in {"extra_high_voltage", "high_voltage", "subtransmission"}
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda bus: (bus.get("base_kv") or 0.0, bus.get("confidence") or 0.0))
 
 
 def _load_allocation_weight(bus: Mapping[str, Any]) -> float:

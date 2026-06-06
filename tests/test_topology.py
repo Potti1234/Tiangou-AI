@@ -46,7 +46,7 @@ def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
 
     assert preview["metadata"]["bus_count"] == 4
     assert preview["metadata"]["branch_count"] == 2
-    assert preview["metadata"]["load_count"] == 4
+    assert preview["metadata"]["load_count"] == 3
     assert preview["metadata"]["demand_allocation_method"] == "voltage_weighted_substation_split"
     assert preview["metadata"]["circuit_class_counts"] == {"inter_facility": 1, "isolated": 1}
     assert preview["metadata"]["circuit_candidate_count"] == 2
@@ -181,12 +181,14 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert case["_metadata"]["component_count"] == 2
     assert case["_metadata"]["load_bearing_component_count"] == 2
     assert case["_metadata"]["largest_component_bus_count"] == 2
-    assert case["_metadata"]["largest_component_bus_share"] == 0.5
+    assert case["_metadata"]["largest_component_bus_share"] == 0.666667
     assert case["_metadata"]["largest_component_load_share"] > 0.75
     assert case["_metadata"]["cleanup_summary"]["component_count"] == 2
     assert case["_metadata"]["cleanup_summary"]["largest_component_load_mw"] == case["_metadata"]["largest_component_load_mw"]
+    assert case["_metadata"]["dropped_non_interfacility_branch_count"] == 1
+    assert case["_metadata"]["raw_solver_candidate_branch_count"] == 1
 
-    assert sorted(case["bus"]) == ["1", "2", "3", "4"]
+    assert sorted(case["bus"]) == ["1", "2", "3"]
     assert all(bus["index"] == bus["bus_i"] for bus in case["bus"].values())
     assert sum(1 for bus in case["bus"].values() if bus["bus_type"] == 3) == 2
     assert all(bus["type"] == bus["bus_type"] for bus in case["bus"].values())
@@ -204,9 +206,9 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert inferred_transformer["transformer_inference"]["method"] == "clear_voltage_mismatch_branch_conversion"
     assert case["_metadata"]["inferred_transformer_branch_count"] == 1
     assert case["_metadata"]["synthetic_branch_count"] == 0
-    assert case["_metadata"]["solver_circuit_class_counts"] == {"inter_facility": 1, "isolated": 1}
+    assert case["_metadata"]["solver_circuit_class_counts"] == {"inter_facility": 1}
     assert case["_metadata"]["voltage_inference"] == {
-        "tagged": 4,
+        "tagged": 3,
         "inferred": 0,
         "unresolved": 0,
         "inferred_by_voltage_kv": {},
@@ -223,19 +225,19 @@ def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     assert {
         branch["parameter_source"]
         for branch in case["branch"].values()
-    } == {"osm_with_inferred_parameters", "inferred_transformer_voltage_pair_default"}
+    } == {"inferred_transformer_voltage_pair_default"}
     assert {
         branch["parameter_table"]
         for branch in case["branch"].values()
-    } == {"underground_cable_defaults", "transformer_two_winding_defaults"}
-    assert {branch["circuit_class"] for branch in case["branch"].values()} == {"inter_facility", "isolated"}
+    } == {"transformer_two_winding_defaults"}
+    assert {branch["circuit_class"] for branch in case["branch"].values()} == {"inter_facility"}
     assert all(branch["circuit_count"] >= 1 for branch in case["branch"].values())
     assert case["_metadata"]["parameter_lookup_tables"]["overhead_line_voltage_kv"] == [33.0, 110.0, 132.0, 220.0, 275.0, 400.0]
     assert case["_metadata"]["parameter_lookup_tables"]["underground_cable_voltage_kv"] == [33.0, 110.0, 132.0, 220.0, 275.0, 400.0]
     assert case["_metadata"]["parameter_lookup_tables"]["load_power_factor"] == 0.95
     assert all(load["provenance"] == "public_peak_demand_scaled_voltage_weighted_substation_split" for load in case["load"].values())
     assert all(load["allocation_method"] == "voltage_weighted_substation_split" for load in case["load"].values())
-    assert case["_metadata"]["provenance_summary"]["branch"] == {"osm_with_inferred_parameters": 2}
+    assert case["_metadata"]["provenance_summary"]["branch"] == {"osm_with_inferred_parameters": 1}
     assert case["_metadata"]["provenance_summary"]["gen"] == {"public_peak_demand_capacity_equivalent": 2}
     assert sum(load["pd"] for load in case["load"].values()) == 95.91
     assert sum(gen["pmax"] for gen in case["gen"].values()) > 95.91
@@ -561,11 +563,11 @@ def test_powermodels_preview_drops_passive_components_from_solver_case() -> None
     case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
 
     assert topology["metadata"]["bus_count"] == 5
-    assert case["_metadata"]["bus_count"] == 4
+    assert case["_metadata"]["bus_count"] == 3
     assert case["_metadata"]["raw_bus_count"] == 5
-    assert case["_metadata"]["retained_bus_count"] == 4
-    assert case["_metadata"]["dropped_passive_bus_count"] == 1
-    assert case["_metadata"]["cleanup_summary"]["dropped_passive_bus_count"] == 1
+    assert case["_metadata"]["retained_bus_count"] == 3
+    assert case["_metadata"]["dropped_passive_bus_count"] == 2
+    assert case["_metadata"]["cleanup_summary"]["dropped_passive_bus_count"] == 2
     assert case["_metadata"]["voltage_inference"]["unresolved"] == 0
     assert all(bus["source_id"] != "osm:node:80" for bus in case["bus"].values())
 
@@ -650,11 +652,11 @@ def test_powermodels_validation_reports_islands_and_capacity() -> None:
     assert validation["status"] == "ok"
     assert validation["metrics"]["island_count"] == 2
     assert validation["metrics"]["total_pd_mw"] == 9591.0
-    assert validation["metrics"]["low_confidence_counts"] == {"branch": 0, "bus": 2, "gen": 2, "load": 4}
+    assert validation["metrics"]["low_confidence_counts"] == {"branch": 0, "bus": 1, "gen": 2, "load": 3}
     assert validation["metrics"]["branch_voltage_mismatch_count"] == 0
     assert validation["metrics"]["severe_branch_voltage_mismatch_count"] == 0
     assert validation["metrics"]["provenance_summary"]["load"] == {
-        "public_peak_demand_scaled_voltage_weighted_substation_split": 4
+        "public_peak_demand_scaled_voltage_weighted_substation_split": 3
     }
     assert validation["voltage_mismatches"] == []
     assert validation["errors"] == []
