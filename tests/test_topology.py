@@ -1,3 +1,7 @@
+from pathlib import Path
+import shutil
+
+import app.topology as topology_module
 from app.topology import (
     _classify_preview_branch,
     build_powermodels_preview,
@@ -8,6 +12,9 @@ from app.topology import (
     split_voltage_circuits,
     validate_powermodels_case,
 )
+
+
+RAW_DIR = Path("data/raw")
 
 
 def test_normalize_voltage_accepts_common_osm_formats() -> None:
@@ -99,6 +106,32 @@ def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
     clp_by_bus_sector = {(load["bus_id"], load["sector"]): load for load in clp_loads}
     assert clp_by_bus_sector[("osm:node:1", "residential")]["source_energy_gwh"] == 5947.234
     assert clp_by_bus_sector[("osm:node:1", "residential")]["pd_mw"] == 1327.642
+
+
+def test_topology_uses_synthetic_clp_only_when_public_total_is_missing(tmp_path, monkeypatch) -> None:
+    raw_dir = tmp_path / "raw"
+    (raw_dir / "hk_electric").mkdir(parents=True)
+    (raw_dir / "emsd").mkdir()
+    shutil.copyfile(
+        RAW_DIR / "hk_electric/consumption_by_district_and_customer_type.csv",
+        raw_dir / "hk_electric/consumption_by_district_and_customer_type.csv",
+    )
+    shutil.copyfile(
+        RAW_DIR / "hk_electric/consumption_by_customer_type.csv",
+        raw_dir / "hk_electric/consumption_by_customer_type.csv",
+    )
+    shutil.copyfile(
+        RAW_DIR / "emsd/energy_end_use_table12.csv",
+        raw_dir / "emsd/energy_end_use_table12.csv",
+    )
+    monkeypatch.setattr(topology_module, "RAW_DATA_DIR", raw_dir)
+
+    preview = build_topology_preview(_sample_rows(), snap_tolerance_km=0.2)
+
+    clp_loads = [load for load in preview["loads"] if load["service_territory"] == "clp"]
+    assert clp_loads
+    assert {load["provenance"] for load in clp_loads} == {"synthetic_missing_clp_data"}
+    assert {load["allocation_method"] for load in clp_loads} == {"synthetic_missing_clp_voltage_weighted_substation_split"}
 
 
 def test_topology_preview_snaps_to_facility_footprint_buffer() -> None:
