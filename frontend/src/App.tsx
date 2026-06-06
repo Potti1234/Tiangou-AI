@@ -252,14 +252,14 @@ function isLinearAsset(asset: GridAsset) {
   )
 }
 
-function reconstructedRouteStyle(branch: TopologyBranch): Pick<RouteLayer, "color" | "width" | "opacity" | "dashArray"> {
+function reconstructedRouteStyle(branch: TopologyBranch, retainedInSolver: boolean): Pick<RouteLayer, "color" | "width" | "opacity" | "dashArray"> {
   const synthetic = branch.provenance?.includes("public") || branch.id.startsWith("synthetic:")
   const inferredTransformer = branch.provenance === "inferred_multi_voltage_facility_transformer"
   if (inferredTransformer) {
-    return { color: "#2563eb", width: 3, opacity: 0.82, dashArray: [4, 2] }
+    return { color: "#2563eb", width: 3, opacity: retainedInSolver ? 0.82 : 0.34, dashArray: [4, 2] }
   }
   if (synthetic) {
-    return { color: "#2563eb", width: 3, opacity: 0.76, dashArray: [3, 2] }
+    return { color: "#2563eb", width: 3, opacity: retainedInSolver ? 0.76 : 0.3, dashArray: [3, 2] }
   }
   if (branch.circuit_class && branch.circuit_class !== "inter_facility") {
     return {
@@ -270,9 +270,9 @@ function reconstructedRouteStyle(branch: TopologyBranch): Pick<RouteLayer, "colo
     }
   }
   return {
-    color: branch.power === "cable" ? "#6d6875" : "#b45309",
-    width: 4,
-    opacity: 0.9,
+    color: retainedInSolver ? "#15803d" : branch.power === "cable" ? "#6d6875" : "#b45309",
+    width: retainedInSolver ? 5 : 3,
+    opacity: retainedInSolver ? 0.92 : 0.32,
     dashArray: undefined,
   }
 }
@@ -620,6 +620,10 @@ function App() {
     return map
   }, [caseData])
 
+  const solverBranchSourceIds = useMemo(() => {
+    return new Set(Object.values(caseData?.branch ?? {}).map((branch) => branch.source_id))
+  }, [caseData])
+
   const severeMismatchSourceIds = useMemo(() => {
     const ids = new Set<string>()
     const mismatches = summary?.validation.metrics.severe_branch_voltage_mismatch_count
@@ -680,10 +684,11 @@ function App() {
       return (topology?.branches ?? []).flatMap((branch) => {
         const coordinates = branchCoordinates(branch)
         if (coordinates.length < 2) return []
-        const style = reconstructedRouteStyle(branch)
+        const retainedInSolver = solverBranchSourceIds.has(branch.id)
+        const style = reconstructedRouteStyle(branch, retainedInSolver)
         return [{
           id: branch.id,
-          label: `${branch.name ?? branch.id} (${branch.circuit_class ?? "unknown"})`,
+          label: `${branch.name ?? branch.id} (${retainedInSolver ? "solver" : branch.circuit_class ?? "dropped"})`,
           coordinates,
           ...style,
         }]
@@ -705,7 +710,7 @@ function App() {
         dashArray: branch.transformer || synthetic ? [3, 2] as [number, number] : undefined,
       }]
     })
-  }, [assets, caseData, mode, severeMismatchSourceIds, topology])
+  }, [assets, caseData, mode, severeMismatchSourceIds, solverBranchSourceIds, topology])
 
   const pointLayers = useMemo<PointLayer[]>(() => {
     if (mode === "raw") return []
