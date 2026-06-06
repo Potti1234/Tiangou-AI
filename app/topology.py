@@ -126,6 +126,52 @@ def parse_power_mw(raw: Any) -> float | None:
     return round(value, 3)
 
 
+def parse_circuit_count(tags: Mapping[str, Any]) -> tuple[int, str]:
+    circuits = _parse_positive_int(tags.get("circuits"))
+    if circuits is not None:
+        return circuits, "circuits"
+
+    cables = _parse_positive_int(tags.get("cables"))
+    if cables is not None:
+        return max(1, cables // 3), "cables_div_3"
+
+    voltages = normalize_voltage(tags.get("voltage"))
+    if len(voltages) > 1:
+        return len(voltages), "multi_voltage"
+
+    return 1, "default_single_circuit"
+
+
+def split_voltage_circuits(tags: Mapping[str, Any]) -> list[dict[str, Any]]:
+    voltages = normalize_voltage(tags.get("voltage"))
+    if not voltages:
+        circuit_count, source = parse_circuit_count(tags)
+        return [{"voltage_kv": None, "circuit_count": circuit_count, "count_source": source}]
+
+    circuit_count, source = parse_circuit_count(tags)
+    if len(voltages) <= 1:
+        return [{"voltage_kv": voltages[0], "circuit_count": circuit_count, "count_source": source}]
+
+    return [
+        {
+            "voltage_kv": voltage,
+            "circuit_count": 1,
+            "count_source": "multi_voltage_split",
+        }
+        for voltage in voltages
+    ]
+
+
+def _parse_positive_int(raw: Any) -> int | None:
+    if raw in (None, ""):
+        return None
+    match = re.search(r"\d+", str(raw))
+    if not match:
+        return None
+    value = int(match.group(0))
+    return value if value > 0 else None
+
+
 def voltage_band(voltage_kv: float | None) -> str:
     if voltage_kv is None:
         return "unknown"
@@ -214,6 +260,33 @@ def _branch_defaults(power: str, voltage_kv: float | None) -> dict[str, Any]:
     defaults = dict(table[nearest])
     defaults["matched_voltage_kv"] = nearest
     return defaults
+
+
+def _classify_preview_branch(from_bus_id: str | None, to_bus_id: str | None) -> str:
+    if from_bus_id is None or to_bus_id is None:
+        return "isolated"
+    if from_bus_id == to_bus_id:
+        return "self_loop"
+    if from_bus_id.startswith("synthetic:") and to_bus_id.startswith("synthetic:"):
+        return "isolated"
+    if from_bus_id.startswith("synthetic:") or to_bus_id.startswith("synthetic:"):
+        return "tap"
+    return "inter_facility"
+
+
+def _circuit_count_source(candidates: list[Mapping[str, Any]]) -> str:
+    sources = {str(candidate.get("count_source") or "unknown") for candidate in candidates}
+    if len(sources) == 1:
+        return next(iter(sources))
+    return "mixed"
+
+
+def _circuit_tags(record: Mapping[str, Any]) -> dict[str, Any]:
+    tags = dict(record.get("tags") or {})
+    for key in ("voltage", "circuits", "cables"):
+        if record.get(key) not in (None, ""):
+            tags[key] = record.get(key)
+    return tags
 
 
 def _generator_capacity(tags: Mapping[str, Any]) -> tuple[float | None, str | None]:
@@ -346,6 +419,8 @@ def build_topology_preview(
 
         defaults = _branch_defaults(record["power"], voltage_kv)
         length_km = _geometry_length_km(geometry)
+        circuit_candidates = split_voltage_circuits(_circuit_tags(record))
+        circuit_class = _classify_preview_branch(endpoint_bus_ids[0], endpoint_bus_ids[1])
         branches.append(
             {
                 "id": f"osm:{record['osm_type']}:{record['osm_id']}",
@@ -360,6 +435,10 @@ def build_topology_preview(
                 "location": record.get("location"),
                 "circuits": record.get("circuits"),
                 "cables": record.get("cables"),
+                "circuit_candidates": circuit_candidates,
+                "circuit_count": sum(candidate["circuit_count"] for candidate in circuit_candidates),
+                "circuit_count_source": _circuit_count_source(circuit_candidates),
+                "circuit_class": circuit_class,
                 "parameter_defaults": defaults,
                 "endpoint_quality": endpoint_quality,
                 "provenance": "osm_with_inferred_parameters",
@@ -373,6 +452,9 @@ def build_topology_preview(
     load_allocations = _allocate_loads(buses, demand_snapshot=demand_snapshot)
     backbone_branches = _synthetic_service_territory_backbone(buses, branches, load_allocations)
     branches.extend(backbone_branches)
+    circuit_class_counts = _count_by(branches, "circuit_class")
+    circuit_candidate_count = sum(len(branch.get("circuit_candidates") or []) for branch in branches)
+    circuit_count_total = sum(int(branch.get("circuit_count") or 1) for branch in branches)
     return {
         "metadata": {
             "schema": "tiangou.topology_preview.v1",
@@ -390,6 +472,9 @@ def build_topology_preview(
             "generator_count": len(generators),
             "load_count": len(load_allocations),
             "synthetic_service_territory_backbone_count": len(backbone_branches),
+            "circuit_class_counts": circuit_class_counts,
+            "circuit_candidate_count": circuit_candidate_count,
+            "circuit_count_total": circuit_count_total,
         },
         "buses": buses,
         "branches": branches,
@@ -1208,6 +1293,10 @@ def _hk_intertie_branches(
             "location": "submarine_or_underground_equivalent",
             "circuits": None,
             "cables": None,
+            "circuit_candidates": [{"voltage_kv": voltage_kv, "circuit_count": 1, "count_source": "public_intertie"}],
+            "circuit_count": 1,
+            "circuit_count_source": "public_intertie",
+            "circuit_class": "inter_facility",
             "parameter_defaults": {
                 "r_ohm_per_km": 0.055,
                 "x_ohm_per_km": 0.16,
@@ -1305,6 +1394,10 @@ def _synthetic_service_territory_backbone(
                     "location": "underground_equivalent",
                     "circuits": None,
                     "cables": None,
+                    "circuit_candidates": [{"voltage_kv": voltage_kv, "circuit_count": 1, "count_source": "synthetic_backbone"}],
+                    "circuit_count": 1,
+                    "circuit_count_source": "synthetic_backbone",
+                    "circuit_class": "inter_facility",
                     "parameter_defaults": defaults,
                     "endpoint_quality": [
                         {"snap": "synthetic_backbone_hub", "bus_id": hub_bus["id"]},

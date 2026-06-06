@@ -2,7 +2,9 @@ from app.topology import (
     build_powermodels_preview,
     build_topology_preview,
     normalize_voltage,
+    parse_circuit_count,
     parse_power_mw,
+    split_voltage_circuits,
     validate_powermodels_case,
 )
 
@@ -20,6 +22,23 @@ def test_parse_power_mw_accepts_common_capacity_units() -> None:
     assert parse_power_mw("bad") is None
 
 
+def test_parse_circuit_count_accepts_paper_osm_sources() -> None:
+    assert parse_circuit_count({"circuits": "2"}) == (2, "circuits")
+    assert parse_circuit_count({"cables": "6"}) == (2, "cables_div_3")
+    assert parse_circuit_count({"voltage": "400000;132000"}) == (2, "multi_voltage")
+    assert parse_circuit_count({}) == (1, "default_single_circuit")
+
+
+def test_split_voltage_circuits_splits_multi_voltage_corridors() -> None:
+    assert split_voltage_circuits({"voltage": "400000;132000", "circuits": "2"}) == [
+        {"voltage_kv": 400.0, "circuit_count": 1, "count_source": "multi_voltage_split"},
+        {"voltage_kv": 132.0, "circuit_count": 1, "count_source": "multi_voltage_split"},
+    ]
+    assert split_voltage_circuits({"voltage": "132000", "cables": "6"}) == [
+        {"voltage_kv": 132.0, "circuit_count": 2, "count_source": "cables_div_3"},
+    ]
+
+
 def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
     rows = _sample_rows()
 
@@ -29,6 +48,9 @@ def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
     assert preview["metadata"]["branch_count"] == 2
     assert preview["metadata"]["load_count"] == 4
     assert preview["metadata"]["demand_allocation_method"] == "voltage_weighted_substation_split"
+    assert preview["metadata"]["circuit_class_counts"] == {"inter_facility": 1, "isolated": 1}
+    assert preview["metadata"]["circuit_candidate_count"] == 2
+    assert preview["metadata"]["circuit_count_total"] == 3
     assert preview["quality"]["synthetic_bus_count"] == 2
 
     snapped_branch = next(branch for branch in preview["branches"] if branch["id"] == "osm:way:10")
@@ -36,10 +58,16 @@ def test_topology_preview_snaps_branches_and_allocates_loads() -> None:
     assert snapped_branch["to_bus_id"] == "osm:node:2"
     assert snapped_branch["endpoint_quality"][0]["snap"] == "matched"
     assert snapped_branch["parameter_defaults"]["matched_voltage_kv"] == 400.0
+    assert snapped_branch["circuit_class"] == "inter_facility"
+    assert snapped_branch["circuit_count"] == 2
+    assert snapped_branch["circuit_count_source"] == "circuits"
 
     synthetic_branch = next(branch for branch in preview["branches"] if branch["id"] == "osm:way:11")
     assert synthetic_branch["endpoint_quality"][0]["snap"] == "synthetic"
     assert synthetic_branch["parameter_defaults"]["matched_voltage_kv"] == 132.0
+    assert synthetic_branch["circuit_class"] == "isolated"
+    assert synthetic_branch["circuit_count"] == 1
+    assert synthetic_branch["circuit_count_source"] == "circuits"
 
     territories = {load["service_territory"] for load in preview["loads"]}
     assert territories == {"clp", "hk-electric"}
