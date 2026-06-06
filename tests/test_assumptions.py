@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app import main
+from app.assumptions.data_centers import estimate_data_center_load
 from app.assumptions.demand_profiles import demand_profile_for_sector, hourly_load_metadata, hourly_profile_summary
 from app.assumptions.lines import branch_parameter_defaults
 from app.assumptions.provenance import ASSUMPTION_TABLES, REQUIRED_PROVENANCE_COLUMNS, read_table_rows
@@ -26,6 +27,7 @@ def test_assumption_csvs_have_required_provenance_columns() -> None:
     assert row_counts["transformer_tap_defaults"] > 0
     assert row_counts["hong_kong_sector_hourly_profiles"] == 120
     assert row_counts["weather_sensitivity_profiles"] == 10
+    assert row_counts["data_center_site_assumptions"] == 3
 
 
 def test_assumption_validation_summary_reports_enrichment_and_remaining_empty_tables() -> None:
@@ -34,7 +36,7 @@ def test_assumption_validation_summary_reports_enrichment_and_remaining_empty_ta
     assert payload["schema"] == "tiangou.assumptions.validation_summary.v1"
     assert payload["status"] == "warning"
     assert payload["table_count"] == 12
-    assert payload["row_count"] == 176
+    assert payload["row_count"] == 179
     assert payload["errors"] == []
     assert {warning["code"] for warning in payload["warnings"]} == {"empty_table"}
     assert set(payload["provenance_classes"]) == {
@@ -43,7 +45,7 @@ def test_assumption_validation_summary_reports_enrichment_and_remaining_empty_ta
         "synthetic_engineering_default",
     }
     assert all(table["status"] == "ok" for table in payload["tables"])
-    assert payload["provenance_counts"] == {"synthetic_engineering_default": 176}
+    assert payload["provenance_counts"] == {"synthetic_engineering_default": 179}
 
 
 def test_line_assumption_lookup_scales_rating_and_exposes_provenance() -> None:
@@ -92,6 +94,26 @@ def test_demand_profile_lookup_normalizes_hourly_shape_and_exposes_provenance() 
     assert summary["commercial"]["share_sum"] == 1.0
 
 
+def test_data_center_estimator_uses_floor_area_and_exposes_provenance() -> None:
+    estimate = estimate_data_center_load(
+        {
+            "proxy_type": "data_center",
+            "weight": 20_000.0,
+            "weight_method": "building_floor_area_proxy",
+            "confidence": 0.7,
+            "name": "Tagged Data Centre",
+            "tags": {"telecom": "data_center"},
+        }
+    )
+
+    assert estimate is not None
+    assert estimate["estimated_it_mw"] == 10.8
+    assert estimate["estimated_facility_mw"] == 15.66
+    assert estimate["pue"] == 1.45
+    assert estimate["floor_area_method"] == "building_floor_area_proxy"
+    assert estimate["provenance"] == "synthetic_engineering_default"
+
+
 def test_assumption_api_summary_and_drilldowns() -> None:
     with TestClient(main.app) as client:
         summary_response = client.get("/assumptions/summary")
@@ -115,7 +137,7 @@ def test_assumption_api_summary_and_drilldowns() -> None:
     summary_payload = summary_response.json()
     assert summary_payload["table_count"] == 12
     assert summary_payload["status"] == "warning"
-    assert summary_payload["row_count"] == 176
+    assert summary_payload["row_count"] == 179
     assert {table["key"] for table in lines_response.json()} == {
         "line_thermal_rating_defaults",
         "cable_impedance_defaults",

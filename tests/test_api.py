@@ -383,6 +383,10 @@ def test_important_consumer_proxy_endpoint_prioritizes_small_important_categorie
     assert len(payload) == 5
     assert {"data_center", "hospital", "charging_station", "station", "industrial_infrastructure"} <= reasons
     assert all("tags" not in marker and "geometry" not in marker for marker in payload)
+    data_center_marker = next(marker for marker in payload if marker["reason"] == "data_center")
+    assert data_center_marker["data_center_load_estimate"]["estimated_it_mw"] == 12.0
+    assert data_center_marker["data_center_load_estimate"]["estimated_facility_mw"] == 17.4
+    assert data_center_marker["data_center_load_estimate"]["provenance"] == "synthetic_engineering_default"
 
 
 def test_important_consumer_proxy_endpoint_excludes_power_producers(tmp_path, monkeypatch) -> None:

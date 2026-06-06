@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.assumptions.contingencies import contingency_assumption_tables
-from app.assumptions.data_centers import data_center_assumption_tables
+from app.assumptions.data_centers import data_center_assumption_tables, estimate_data_center_load
 from app.assumptions.demand_profiles import demand_profile_assumption_tables
 from app.assumptions.generators import generator_assumption_tables
 from app.assumptions.imports import import_assumption_tables
@@ -598,19 +598,23 @@ def important_consumer_proxies(
         reason = proxy["reason"]
         if reason == "transport":
             reason = "airport" if proxy["proxy_type"] == "aerodrome" else proxy["proxy_type"]
-        markers.append(
-            {
-                "id": marker_id,
-                "name": proxy["name"],
-                "proxy_type": proxy["proxy_type"],
-                "sector": proxy["sector"],
-                "weight": proxy["weight"],
-                "confidence": proxy["confidence"],
-                "lat": proxy["lat"],
-                "lon": proxy["lon"],
-                "reason": reason,
-            }
-        )
+        marker = {
+            "id": marker_id,
+            "name": proxy["name"],
+            "proxy_type": proxy["proxy_type"],
+            "sector": proxy["sector"],
+            "weight": proxy["weight"],
+            "confidence": proxy["confidence"],
+            "lat": proxy["lat"],
+            "lon": proxy["lon"],
+            "reason": reason,
+        }
+        if reason == "data_center":
+            estimate_input = dict(proxy)
+            tags_json = estimate_input.pop("tags_json", None)
+            estimate_input["tags"] = json.loads(tags_json) if tags_json else {}
+            marker["data_center_load_estimate"] = estimate_data_center_load(estimate_input)
+        markers.append(marker)
         if len(markers) >= limit:
             break
     return markers

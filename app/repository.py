@@ -336,8 +336,8 @@ def _list_consumer_proxy_marker_rows_by_reason(
     params.append(limit)
     return conn.execute(
         f"""
-        SELECT osm_type, osm_id, region_key, proxy_type, sector, weight, confidence,
-               name, lat, lon, ? AS reason
+        SELECT osm_type, osm_id, region_key, proxy_type, sector, weight, weight_method,
+               confidence, name, tags_json, lat, lon, ? AS reason
         FROM consumer_proxy_elements
         WHERE {where}
         ORDER BY weight DESC, proxy_type, osm_type, osm_id
