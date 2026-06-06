@@ -86,11 +86,11 @@ def build_solver_commands(manifest_path: Path, solver_dir: Path | None = None) -
     scenarios_path = manifest_path.parent / "scenarios"
 
     commands: list[list[str]] = []
-    exports = manifest.get("exports") or []
+    exports = manifest.get("solver_exports") or manifest.get("exports") or []
     for export in exports:
         raw_path = Path(export["output_path"])
-        solvable_path = raw_path.with_suffix("").with_suffix(".solvable.json")
-        pyg_path = raw_path.with_suffix("").with_suffix(".pyg.json")
+        solvable_path = _solvable_path(raw_path)
+        pyg_path = _pyg_path(raw_path)
         commands.extend(
             [
                 _julia_command(pipeline_dir, "solve_topo_json.jl", raw_path, solvable_path),
@@ -148,6 +148,14 @@ def _julia_command(solver_dir: Path, script_name: str, *args: object) -> list[st
         str(solver_dir / script_name),
         *(str(arg) for arg in args),
     ]
+
+
+def _solvable_path(raw_path: Path) -> Path:
+    return raw_path.with_name(f"{raw_path.stem}.solvable.json")
+
+
+def _pyg_path(raw_path: Path) -> Path:
+    return raw_path.with_name(f"{raw_path.stem}.pyg.json")
 
 
 def _run_command(command: Sequence[str]) -> dict[str, Any]:

@@ -5,6 +5,7 @@ from typing import Any
 
 from app.database import connect
 from app.gridsfm_solver_config import DEFAULT_GRIDSFM_SOLVER_DIR, REQUIRED_SOLVER_SCRIPTS
+from app.gridsfm_case_tools import sanitize_powermodels_case_for_ac, write_diagnostic_report
 from app.repository import list_consumer_proxy_allocation_rows, list_elements
 from app.topology import (
     DEFAULT_MIN_SOLVER_GENERATOR_MW,
@@ -41,6 +42,7 @@ def export_powermodels_case(
     solver_include_policy: str = DEFAULT_SOLVER_INCLUDE_POLICY,
     min_solver_generator_mw: float = DEFAULT_MIN_SOLVER_GENERATOR_MW,
     include_synthetic_generator_connections: bool = True,
+    solver_sanitize_ac: bool = False,
     allow_validation_errors: bool = False,
 ) -> dict[str, Any]:
     with connect(database_path) as conn:
@@ -59,6 +61,8 @@ def export_powermodels_case(
         min_solver_generator_mw=min_solver_generator_mw,
         include_synthetic_generator_connections=include_synthetic_generator_connections,
     )
+    if solver_sanitize_ac:
+        case = sanitize_powermodels_case_for_ac(case)
     validation = validate_powermodels_case(case)
     if validation["status"] == "error" and not allow_validation_errors:
         codes = ", ".join(error["code"] for error in validation["errors"])
@@ -76,6 +80,8 @@ def export_powermodels_case(
         "solver_include_policy": solver_include_policy,
         "min_solver_generator_mw": min_solver_generator_mw,
         "include_synthetic_generator_connections": include_synthetic_generator_connections,
+        "solver_sanitized": bool((case.get("_metadata") or {}).get("solver_sanitized")),
+        "solver_sanitization_summary": (case.get("_metadata") or {}).get("solver_sanitization_summary"),
         "validation": validation,
         "metadata": case["_metadata"],
     }
@@ -94,6 +100,7 @@ def export_hong_kong_phase1_bundle(
     solver_include_policy: str = DEFAULT_SOLVER_INCLUDE_POLICY,
     min_solver_generator_mw: float = DEFAULT_MIN_SOLVER_GENERATOR_MW,
     include_synthetic_generator_connections: bool = True,
+    solver_sanitize_ac: bool = True,
     n_per_mode: int = 1,
     allow_validation_errors: bool = False,
 ) -> dict[str, Any]:
@@ -108,13 +115,33 @@ def export_hong_kong_phase1_bundle(
         _validate_bundle_snapshot(demand_snapshot)
 
     exports = []
+    raw_demo_exports = []
+    solver_exports = []
     multi_derate = len(derate_scenarios) > 1
     for derate in derate_scenarios:
         for demand_snapshot in bundle_snapshots:
-            exports.append(
-                export_powermodels_case(
+            raw_export = export_powermodels_case(
+                database_path=database_path,
+                output_path=output_dir / _bundle_filename(DEMAND_SNAPSHOT_LABELS[demand_snapshot], derate, multi_derate=multi_derate),
+                region_key="hong-kong",
+                snap_tolerance_km=snap_tolerance_km,
+                demand_snapshot=demand_snapshot,
+                include_hk_interties=include_hk_interties,
+                hk_intertie_derate=derate,
+                min_voltage_kv=min_voltage_kv,
+                solver_include_policy=solver_include_policy,
+                min_solver_generator_mw=min_solver_generator_mw,
+                include_synthetic_generator_connections=include_synthetic_generator_connections,
+                solver_sanitize_ac=False,
+                allow_validation_errors=allow_validation_errors,
+            )
+            raw_demo_exports.append(raw_export)
+            exports.append(raw_export)
+            write_diagnostic_report(Path(raw_export["output_path"]))
+            if solver_sanitize_ac:
+                solver_export = export_powermodels_case(
                     database_path=database_path,
-                    output_path=output_dir / _bundle_filename(DEMAND_SNAPSHOT_LABELS[demand_snapshot], derate, multi_derate=multi_derate),
+                    output_path=output_dir / _solver_sanitized_filename(DEMAND_SNAPSHOT_LABELS[demand_snapshot], derate, multi_derate=multi_derate),
                     region_key="hong-kong",
                     snap_tolerance_km=snap_tolerance_km,
                     demand_snapshot=demand_snapshot,
@@ -124,9 +151,11 @@ def export_hong_kong_phase1_bundle(
                     solver_include_policy=solver_include_policy,
                     min_solver_generator_mw=min_solver_generator_mw,
                     include_synthetic_generator_connections=include_synthetic_generator_connections,
+                    solver_sanitize_ac=True,
                     allow_validation_errors=allow_validation_errors,
                 )
-            )
+                solver_exports.append(solver_export)
+                write_diagnostic_report(Path(solver_export["output_path"]))
 
     manifest = {
         "region_key": "hong-kong",
@@ -138,10 +167,19 @@ def export_hong_kong_phase1_bundle(
         "solver_include_policy": solver_include_policy,
         "min_solver_generator_mw": min_solver_generator_mw,
         "include_synthetic_generator_connections": include_synthetic_generator_connections,
+        "solver_sanitize_ac": solver_sanitize_ac,
         "n_per_mode": n_per_mode,
         "exports": exports,
+        "raw_demo_exports": raw_demo_exports,
+        "solver_exports": solver_exports or exports,
+        "solver_sanitization_summary": _solver_sanitization_summary(solver_exports),
     }
-    manifest["solver_handoff"] = _write_solver_handoff(output_dir, exports, n_per_mode=n_per_mode)
+    manifest["solver_handoff"] = _write_solver_handoff(output_dir, solver_exports or exports, n_per_mode=n_per_mode)
+    manifest["solver_artifact_status"] = {
+        "handoff_uses_solver_sanitized_exports": bool(solver_exports),
+        "raw_demo_export_count": len(raw_demo_exports),
+        "solver_export_count": len(solver_exports or exports),
+    }
     manifest_path = output_dir / "hong_kong_phase1_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     return {**manifest, "manifest_path": str(manifest_path)}
@@ -151,6 +189,23 @@ def _bundle_filename(hour_label: str, derate: float, *, multi_derate: bool) -> s
     if not multi_derate:
         return f"hong_kong_{hour_label}_model.json"
     return f"hong_kong_{hour_label}_intertie_{_derate_label(derate)}_model.json"
+
+
+def _solver_sanitized_filename(hour_label: str, derate: float, *, multi_derate: bool) -> str:
+    raw_name = _bundle_filename(hour_label, derate, multi_derate=multi_derate)
+    return raw_name.replace("_model.json", "_model.solver_sanitized.json")
+
+
+def _solver_sanitization_summary(exports: list[dict[str, Any]]) -> dict[str, Any]:
+    action_counts: dict[str, int] = {}
+    for export in exports:
+        summary = export.get("solver_sanitization_summary") or {}
+        for action, count in (summary.get("action_counts") or {}).items():
+            action_counts[str(action)] = action_counts.get(str(action), 0) + int(count)
+    return {
+        "solver_sanitized_export_count": len(exports),
+        "action_counts": dict(sorted(action_counts.items())),
+    }
 
 
 def _derate_label(derate: float) -> str:
@@ -178,11 +233,11 @@ def _write_solver_handoff(
     solver_pipeline_path = str(DEFAULT_GRIDSFM_SOLVER_DIR)
     solver_pipeline_ps_path = solver_pipeline_path.replace("/", "\\")
     solvable_paths = [
-        str(Path(export["output_path"]).with_suffix("").with_suffix(".solvable.json"))
+        str(_solvable_path(Path(export["output_path"])))
         for export in exports
     ]
     pyg_paths = [
-        str(Path(export["output_path"]).with_suffix("").with_suffix(".pyg.json"))
+        str(_pyg_path(Path(export["output_path"])))
         for export in exports
     ]
 
@@ -252,6 +307,14 @@ def _write_solver_handoff(
     }
 
 
+def _solvable_path(raw_path: Path) -> Path:
+    return raw_path.with_name(f"{raw_path.stem}.solvable.json")
+
+
+def _pyg_path(raw_path: Path) -> Path:
+    return raw_path.with_name(f"{raw_path.stem}.pyg.json")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Export an ingested OSM region as a PowerModels preview JSON.")
     parser.add_argument("output_path", type=Path, help="Path for the generated PowerModels JSON, or an output directory with --hong-kong-phase1-bundle.")
@@ -313,11 +376,26 @@ def main() -> None:
         help="Write the JSON even when structural validation reports errors.",
     )
     parser.add_argument(
+        "--solver-sanitize-ac",
+        action="store_true",
+        default=None,
+        help="Write an auditable AC-sanitized solver variant. Phase 1 bundles write sanitized solver exports by default.",
+    )
+    parser.add_argument(
+        "--no-solver-sanitize-ac",
+        dest="solver_sanitize_ac",
+        action="store_false",
+        help="Disable AC-sanitized solver exports for the Phase 1 bundle.",
+    )
+    parser.add_argument(
         "--hong-kong-phase1-bundle",
         action="store_true",
         help="Write hong_kong_16h_model.json, hong_kong_04h_model.json, and a manifest into output_path.",
     )
     args = parser.parse_args()
+    solver_sanitize_ac = args.solver_sanitize_ac
+    if solver_sanitize_ac is None:
+        solver_sanitize_ac = bool(args.hong_kong_phase1_bundle)
 
     if args.hong_kong_phase1_bundle:
         result = export_hong_kong_phase1_bundle(
@@ -332,6 +410,7 @@ def main() -> None:
             solver_include_policy=args.solver_include_policy,
             min_solver_generator_mw=args.min_solver_generator_mw,
             include_synthetic_generator_connections=args.include_synthetic_generator_connections,
+            solver_sanitize_ac=solver_sanitize_ac,
             n_per_mode=args.n_per_mode,
             allow_validation_errors=args.allow_validation_errors,
         )
@@ -348,6 +427,7 @@ def main() -> None:
             solver_include_policy=args.solver_include_policy,
             min_solver_generator_mw=args.min_solver_generator_mw,
             include_synthetic_generator_connections=args.include_synthetic_generator_connections,
+            solver_sanitize_ac=solver_sanitize_ac,
             allow_validation_errors=args.allow_validation_errors,
         )
     print(json.dumps(result, indent=2, sort_keys=True))

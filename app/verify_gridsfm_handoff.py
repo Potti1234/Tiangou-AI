@@ -11,17 +11,18 @@ def verify_handoff_artifacts(
 ) -> dict[str, Any]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     solver_handoff = manifest.get("solver_handoff") or {}
-    exports = manifest.get("exports") or []
+    raw_exports = manifest.get("raw_demo_exports") or manifest.get("exports") or []
+    solver_exports = manifest.get("solver_exports") or manifest.get("exports") or []
     output_dir = manifest_path.parent
     scenario_dir = scenario_root or output_dir / "scenarios"
 
     artifact_rows = []
     errors = []
     raw_mtimes = []
-    for export in exports:
+    for export in solver_exports:
         raw_path = Path(export["output_path"])
-        solvable_path = Path(str(raw_path.with_suffix("").with_suffix(".solvable.json")))
-        pyg_path = Path(str(raw_path.with_suffix("").with_suffix(".pyg.json")))
+        solvable_path = _solvable_path(raw_path)
+        pyg_path = _pyg_path(raw_path)
         raw_mtime = _artifact_mtime(raw_path)
         solvable_mtime = _artifact_mtime(solvable_path)
         pyg_mtime = _artifact_mtime(pyg_path)
@@ -59,7 +60,7 @@ def verify_handoff_artifacts(
                     }
                 )
 
-    scenario_files = sorted(scenario_dir.rglob("*.json")) if scenario_dir.exists() else []
+    scenario_files = _scenario_files_for_exports(scenario_dir, solver_exports)
     scenario_mtimes = [_artifact_mtime(path) for path in scenario_files]
     latest_raw_mtime = max(raw_mtimes) if raw_mtimes else None
     stale_scenario_count = (
@@ -67,7 +68,7 @@ def verify_handoff_artifacts(
         if scenario_mtimes
         else 0
     )
-    expected_scenario_count = _expected_scenario_count(solver_handoff, exports)
+    expected_scenario_count = _expected_scenario_count(solver_handoff, solver_exports)
     if expected_scenario_count and len(scenario_files) < expected_scenario_count:
         errors.append(
             {
@@ -92,7 +93,9 @@ def verify_handoff_artifacts(
         "scenario_dir": str(scenario_dir),
         "errors": errors,
         "metrics": {
-            "export_count": len(exports),
+            "export_count": len(solver_exports),
+            "raw_demo_export_count": len(raw_exports),
+            "solver_export_count": len(solver_exports),
             "raw_count": sum(1 for row in artifact_rows if row["raw_exists"]),
             "solvable_count": sum(1 for row in artifact_rows if row["solvable_exists"]),
             "pyg_count": sum(1 for row in artifact_rows if row["pyg_exists"]),
@@ -110,8 +113,25 @@ def _expected_scenario_count(solver_handoff: dict[str, Any], exports: list[dict[
     n_per_mode = int(solver_handoff.get("n_per_mode") or 0)
     if n_per_mode <= 0:
         return 0
-    # gen_perturbed_data.jl currently emits base plus five perturbation modes.
-    return len(exports) * n_per_mode * 6
+    # gen_perturbed_data.jl emits one base case plus five perturbation modes
+    # with n_per_mode samples per mode.
+    return len(exports) * (1 + 5 * n_per_mode)
+
+
+def _scenario_files_for_exports(scenario_dir: Path, exports: list[dict[str, Any]]) -> list[Path]:
+    if not scenario_dir.exists():
+        return []
+    files: list[Path] = []
+    for export in exports:
+        output_path = export.get("output_path") if isinstance(export, dict) else None
+        if not isinstance(output_path, str):
+            continue
+        export_dir = scenario_dir / Path(output_path).stem
+        if export_dir.exists():
+            files.extend(sorted(export_dir.rglob("*.json")))
+    if files:
+        return files
+    return sorted(scenario_dir.rglob("*.json"))
 
 
 def _artifact_mtime(path: Path) -> float | None:
@@ -119,6 +139,14 @@ def _artifact_mtime(path: Path) -> float | None:
         return path.stat().st_mtime
     except FileNotFoundError:
         return None
+
+
+def _solvable_path(raw_path: Path) -> Path:
+    return raw_path.with_name(f"{raw_path.stem}.solvable.json")
+
+
+def _pyg_path(raw_path: Path) -> Path:
+    return raw_path.with_name(f"{raw_path.stem}.pyg.json")
 
 
 def main() -> None:

@@ -193,8 +193,11 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert result["solver_include_policy"] == "demo_full_osm"
     assert result["min_solver_generator_mw"] == 0.5
     assert result["include_synthetic_generator_connections"] is True
+    assert result["solver_sanitize_ac"] is True
     assert result["n_per_mode"] == 3
     assert len(result["exports"]) == 2
+    assert len(result["raw_demo_exports"]) == 2
+    assert len(result["solver_exports"]) == 2
 
     peak = json.loads(peak_path.read_text(encoding="utf-8"))
     overnight = json.loads(overnight_path.read_text(encoding="utf-8"))
@@ -204,6 +207,7 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert peak["_metadata"]["include_hk_interties"] is True
     assert peak["_metadata"]["hk_intertie_derate"] == 0.5
     assert peak["_metadata"]["solver_include_policy"] == "demo_full_osm"
+    assert peak["_metadata"].get("solver_sanitized") is not True
     assert peak["_metadata"]["min_solver_generator_mw"] == 0.5
     assert peak["_metadata"]["include_synthetic_generator_connections"] is True
     handoff_script = handoff_path.read_text(encoding="utf-8")
@@ -221,8 +225,8 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert "GridSFM exporter did not produce PyG file" in handoff_script
     assert "Scenario generator did not produce output directory" in handoff_script
     assert grids_solvable_path.read_text(encoding="utf-8").splitlines() == [
-        f"{output_dir / 'hong_kong_16h_model.solvable.json'} 3",
-        f"{output_dir / 'hong_kong_04h_model.solvable.json'} 3",
+        f"{output_dir / 'hong_kong_16h_model.solver_sanitized.solvable.json'} 3",
+        f"{output_dir / 'hong_kong_04h_model.solver_sanitized.solvable.json'} 3",
     ]
     assert manifest["solver_handoff"]["script_path"] == str(handoff_path)
     assert manifest["solver_handoff"]["embedded_solver_pipeline"] is True
@@ -237,6 +241,7 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     ]
     assert manifest["solver_handoff"]["grids_solvable_path"] == str(grids_solvable_path)
     assert manifest["solver_handoff"]["n_per_mode"] == 3
+    assert manifest["solver_artifact_status"]["handoff_uses_solver_sanitized_exports"] is True
     assert manifest["solver_include_policy"] == "demo_full_osm"
     assert manifest["min_solver_generator_mw"] == 0.5
     assert manifest["include_synthetic_generator_connections"] is True
@@ -245,6 +250,10 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert manifest["exports"][0]["include_synthetic_generator_connections"] is True
     assert manifest["exports"][0]["validation"]["status"] == "warning"
     assert manifest["exports"][0]["validation"]["warnings"][0]["code"] == "clp_inferred_from_territory_total"
+    assert manifest["solver_exports"][0]["solver_sanitized"] is True
+    assert Path(manifest["solver_exports"][0]["output_path"]).name == "hong_kong_16h_model.solver_sanitized.json"
+    assert (output_dir / "diagnostics" / "hong_kong_16h_model.gridsfm_diagnostics.json").exists()
+    assert (output_dir / "diagnostics" / "hong_kong_16h_model.solver_sanitized.gridsfm_diagnostics.json").exists()
 
 
 def test_export_hong_kong_phase1_bundle_writes_intertie_derate_stress_cases(tmp_path) -> None:
@@ -269,6 +278,10 @@ def test_export_hong_kong_phase1_bundle_writes_intertie_derate_stress_cases(tmp_
         output_dir / "hong_kong_04h_intertie_050_model.json",
     ]
     assert [Path(export["output_path"]) for export in result["exports"]] == expected_files
+    assert [Path(export["output_path"]) for export in result["solver_exports"]] == [
+        path.with_name(path.name.replace("_model.json", "_model.solver_sanitized.json"))
+        for path in expected_files
+    ]
     assert all(path.exists() for path in expected_files)
     assert result["intertie_derate_scenarios"] == [1.0, 0.5]
 
@@ -279,7 +292,7 @@ def test_export_hong_kong_phase1_bundle_writes_intertie_derate_stress_cases(tmp_
     assert base_intertie["rate_a"] == 720.0
     assert stress_intertie["rate_a"] == 360.0
     assert (output_dir / "grids_solvable.txt").read_text(encoding="utf-8").splitlines() == [
-        f"{path.with_suffix('').with_suffix('.solvable.json')} 1"
+        f"{path.with_name(path.stem + '.solver_sanitized.solvable.json')} 1"
         for path in expected_files
     ]
 

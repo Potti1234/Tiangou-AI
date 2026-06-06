@@ -47,11 +47,13 @@ def test_check_julia_available_reports_missing_julia(monkeypatch) -> None:
 
 def test_build_solver_commands_from_manifest(tmp_path) -> None:
     raw_path = tmp_path / "hong_kong_16h_model.json"
+    solver_path = tmp_path / "hong_kong_16h_model.solver_sanitized.json"
     manifest_path = tmp_path / "hong_kong_phase1_manifest.json"
     manifest_path.write_text(
         json.dumps(
             {
                 "exports": [{"output_path": str(raw_path)}],
+                "solver_exports": [{"output_path": str(solver_path)}],
                 "solver_handoff": {
                     "solver_pipeline_path": "third_party/gridsfm_solver",
                     "grids_solvable_path": str(tmp_path / "grids_solvable.txt"),
@@ -64,10 +66,10 @@ def test_build_solver_commands_from_manifest(tmp_path) -> None:
     commands = gridsfm_solver.build_solver_commands(manifest_path)
 
     solver_dir = Path("third_party/gridsfm_solver")
-    solvable_path = tmp_path / "hong_kong_16h_model.solvable.json"
-    pyg_path = tmp_path / "hong_kong_16h_model.pyg.json"
+    solvable_path = tmp_path / "hong_kong_16h_model.solver_sanitized.solvable.json"
+    pyg_path = tmp_path / "hong_kong_16h_model.solver_sanitized.pyg.json"
     assert commands == [
-        ["julia", f"--project={solver_dir}", str(solver_dir / "solve_topo_json.jl"), str(raw_path), str(solvable_path)],
+        ["julia", f"--project={solver_dir}", str(solver_dir / "solve_topo_json.jl"), str(solver_path), str(solvable_path)],
         ["julia", f"--project={solver_dir}", str(solver_dir / "export_gridsfm_data.jl"), str(solvable_path), str(pyg_path)],
         ["julia", f"--project={solver_dir}", str(solver_dir / "solve_pyg_json.jl"), str(solvable_path), str(pyg_path)],
         ["julia", f"--project={solver_dir}", str(solver_dir / "gen_perturbed_data.jl"), str(tmp_path / "grids_solvable.txt"), "1", str(tmp_path / "scenarios")],
@@ -85,4 +87,3 @@ def test_run_solver_handoff_returns_preflight_diagnostic_when_julia_missing(tmp_
     assert result["status"] == "error"
     assert result["julia"]["available"] is False
     assert result["solver"]["available"] is True
-

@@ -6,17 +6,20 @@ from app.verify_gridsfm_handoff import verify_handoff_artifacts
 
 def test_verify_handoff_artifacts_reports_complete_bundle(tmp_path) -> None:
     raw_path = tmp_path / "hong_kong_16h_model.json"
-    solvable_path = tmp_path / "hong_kong_16h_model.solvable.json"
-    pyg_path = tmp_path / "hong_kong_16h_model.pyg.json"
+    solver_path = tmp_path / "hong_kong_16h_model.solver_sanitized.json"
+    solvable_path = tmp_path / "hong_kong_16h_model.solver_sanitized.solvable.json"
+    pyg_path = tmp_path / "hong_kong_16h_model.solver_sanitized.pyg.json"
     scenario_dir = tmp_path / "scenarios"
     scenario_dir.mkdir()
-    for path in [raw_path, solvable_path, pyg_path, *(scenario_dir / f"scenario_{index}.json" for index in range(6))]:
+    for path in [raw_path, solver_path, solvable_path, pyg_path, *(scenario_dir / f"scenario_{index}.json" for index in range(6))]:
         path.write_text("{}", encoding="utf-8")
     manifest_path = tmp_path / "hong_kong_phase1_manifest.json"
     manifest_path.write_text(
         json.dumps(
             {
                 "exports": [{"output_path": str(raw_path)}],
+                "raw_demo_exports": [{"output_path": str(raw_path)}],
+                "solver_exports": [{"output_path": str(solver_path)}],
                 "solver_handoff": {"n_per_mode": 1},
             }
         ),
@@ -26,6 +29,8 @@ def test_verify_handoff_artifacts_reports_complete_bundle(tmp_path) -> None:
     result = verify_handoff_artifacts(manifest_path)
 
     assert result["status"] == "ok"
+    assert result["metrics"]["raw_demo_export_count"] == 1
+    assert result["metrics"]["solver_export_count"] == 1
     assert result["metrics"]["raw_count"] == 1
     assert result["metrics"]["solvable_count"] == 1
     assert result["metrics"]["pyg_count"] == 1
