@@ -120,17 +120,30 @@ Include additional demand snapshots in a bundle when you want load-stress cases:
 python -m app.export_powermodels data/processed --hong-kong-phase1-bundle --bundle-demand-snapshots peak_16h,overnight_04h,shoulder_10h,cooling_peak_18h
 ```
 
-The bundle also writes `run_hong_kong_solver_pipeline.ps1` and `grids_solvable.txt` for the downstream Julia solve/export/base-verify/scenario steps. The script preflights a runnable `julia` command and the expected solver scripts, then verifies each `.solvable.json`, `.pyg.json`, and scenario output before moving on. Pass the cloned solver path when running it if needed:
+The bundle also writes `run_hong_kong_solver_pipeline.ps1` and `grids_solvable.txt` for the downstream Julia solve/export/base-verify/scenario steps. The minimal GridSFM Julia solver pipeline is vendored in `third_party/gridsfm_solver`, so the default workflow is self-contained once Julia is available:
 
 ```powershell
-.\data\processed\run_hong_kong_solver_pipeline.ps1 -SolverPipeline "..\GridSFM\power_grid\US\topology_solver_pipeline"
+julia --project=third_party/gridsfm_solver -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"
+python -m app.export_powermodels data/processed --hong-kong-phase1-bundle --min-voltage-kv 100 --include-hk-interties
+python -m app.gridsfm_solver check
+python -m app.gridsfm_solver run data/processed/hong_kong_phase1_manifest.json
 ```
+
+The generated PowerShell handoff is still available and defaults to `third_party\gridsfm_solver`:
+
+```powershell
+.\data\processed\run_hong_kong_solver_pipeline.ps1
+```
+
+Pass `-SolverPipeline "C:\custom\solver"` only when intentionally testing another solver checkout.
 
 Verify the generated raw/solvable/PyG/scenario artifacts after the Julia handoff:
 
 ```powershell
 python -m app.verify_gridsfm_handoff data/processed/hong_kong_phase1_manifest.json
 ```
+
+The embedded solver files under `third_party/gridsfm_solver` are a minimal MIT-licensed copy of GridSFM's `power_grid/US/topology_solver_pipeline`; see `third_party/gridsfm_solver/LICENSE` and `third_party/gridsfm_solver/NOTICE.md`.
 
 Current Hong Kong Phase 1 smoke status, using `--include-hk-interties --min-voltage-kv 100 --n-per-mode 1`:
 
