@@ -168,6 +168,116 @@ def test_topology_preview_merges_fragmented_same_voltage_circuits() -> None:
     assert all(not bus["source_id"].startswith("synthetic:") for bus in case["bus"].values())
 
 
+def test_topology_preview_splits_multi_voltage_facilities_with_transformers() -> None:
+    rows = [
+        {
+            "osm_type": "node",
+            "osm_id": 120,
+            "power": "substation",
+            "name": "Multi Voltage Hub",
+            "voltage": "400000;132000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.30,
+            "lon": 114.10,
+            "tags_json": '{"operator": "CLP Power", "voltage": "400000;132000"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "node",
+            "osm_id": 121,
+            "power": "substation",
+            "name": "High Voltage Neighbor",
+            "voltage": "400000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.31,
+            "lon": 114.11,
+            "tags_json": '{"operator": "CLP Power", "voltage": "400000"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "node",
+            "osm_id": 122,
+            "power": "substation",
+            "name": "Low Voltage Neighbor",
+            "voltage": "132000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": None,
+            "location": None,
+            "lat": 22.29,
+            "lon": 114.09,
+            "tags_json": '{"operator": "CLP Power", "voltage": "132000"}',
+            "geometry_json": None,
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "way",
+            "osm_id": 123,
+            "power": "line",
+            "name": "400 kV tie",
+            "voltage": "400000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": "1",
+            "location": None,
+            "lat": 22.305,
+            "lon": 114.105,
+            "tags_json": '{"operator": "CLP Power", "voltage": "400000"}',
+            "geometry_json": '[{"lat": 22.3000, "lon": 114.1000}, {"lat": 22.3100, "lon": 114.1100}]',
+            "updated_at": "2026-01-01 00:00:00",
+        },
+        {
+            "osm_type": "way",
+            "osm_id": 124,
+            "power": "line",
+            "name": "132 kV tie",
+            "voltage": "132000",
+            "operator": "CLP Power",
+            "frequency": "50",
+            "cables": None,
+            "circuits": "1",
+            "location": None,
+            "lat": 22.295,
+            "lon": 114.095,
+            "tags_json": '{"operator": "CLP Power", "voltage": "132000"}',
+            "geometry_json": '[{"lat": 22.3000, "lon": 114.1000}, {"lat": 22.2900, "lon": 114.0900}]',
+            "updated_at": "2026-01-01 00:00:00",
+        },
+    ]
+
+    topology = build_topology_preview(rows, snap_tolerance_km=0.2)
+    case = build_powermodels_preview(rows, snap_tolerance_km=0.2)
+
+    assert topology["metadata"]["bus_count"] == 4
+    assert topology["metadata"]["branch_count"] == 3
+    assert topology["metadata"]["inferred_facility_transformer_count"] == 1
+    high_bus = "osm:node:120:voltage:400"
+    low_bus = "osm:node:120:voltage:132"
+    assert {bus["id"] for bus in topology["buses"]} >= {high_bus, low_bus}
+    assert next(branch for branch in topology["branches"] if branch["id"] == "osm:way:123")["from_bus_id"] == high_bus
+    assert next(branch for branch in topology["branches"] if branch["id"] == "osm:way:124")["from_bus_id"] == low_bus
+    inferred = next(
+        branch
+        for branch in case["branch"].values()
+        if branch["provenance"] == "inferred_multi_voltage_facility_transformer"
+    )
+    assert inferred["transformer"] is True
+    assert inferred["transformer_inference"]["method"] == "clear_voltage_mismatch_branch_conversion"
+    assert case["_metadata"]["inferred_transformer_branch_count"] == 1
+
+
 def test_powermodels_preview_exports_solver_handoff_shape() -> None:
     case = build_powermodels_preview(_sample_rows(), snap_tolerance_km=0.2)
 

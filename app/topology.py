@@ -261,16 +261,29 @@ def _nearest_bus(
     buses: list[dict[str, Any]],
     point: tuple[float, float],
     snap_tolerance_km: float,
+    *,
+    voltage_kv: float | None = None,
 ) -> tuple[str | None, float | None]:
     best_id = None
     best_distance = None
+    best_voltage_delta = None
     for bus in buses:
         if bus["lat"] is None or bus["lon"] is None:
             continue
         distance = _haversine_km(point, (bus["lat"], bus["lon"]))
-        if best_distance is None or distance < best_distance:
+        bus_voltage = bus.get("base_kv")
+        voltage_delta = abs(float(bus_voltage) - voltage_kv) if bus_voltage is not None and voltage_kv is not None else math.inf
+        if (
+            best_distance is None
+            or distance < best_distance
+            or (
+                abs(distance - best_distance) <= 1e-6
+                and voltage_delta < (best_voltage_delta if best_voltage_delta is not None else math.inf)
+            )
+        ):
             best_id = bus["id"]
             best_distance = distance
+            best_voltage_delta = voltage_delta
     if best_distance is None or best_distance > snap_tolerance_km:
         return None, best_distance
     return best_id, best_distance
@@ -457,6 +470,59 @@ def _drop_unreferenced_synthetic_buses(
     ]
 
 
+def _inferred_facility_transformers(buses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    buses_by_facility: dict[str, list[dict[str, Any]]] = {}
+    for bus in buses:
+        facility_id = bus.get("facility_id")
+        base_kv = bus.get("base_kv")
+        if not facility_id or base_kv is None:
+            continue
+        buses_by_facility.setdefault(str(facility_id), []).append(bus)
+
+    transformers = []
+    for facility_id, facility_buses in sorted(buses_by_facility.items()):
+        voltage_buses = sorted(
+            facility_buses,
+            key=lambda bus: float(bus.get("base_kv") or 0.0),
+            reverse=True,
+        )
+        if len(voltage_buses) < 2:
+            continue
+        for index, (high_bus, low_bus) in enumerate(zip(voltage_buses, voltage_buses[1:]), start=1):
+            high_kv = float(high_bus["base_kv"])
+            low_kv = float(low_bus["base_kv"])
+            defaults = _branch_defaults("line", high_kv)
+            defaults["rate_mva"] = max(float(defaults.get("rate_mva") or 0.0), 300.0)
+            transformers.append(
+                {
+                    "id": f"inferred:transformer:{facility_id}:{_format_voltage_id(high_kv)}-{_format_voltage_id(low_kv)}:{index}",
+                    "source": {"facility_id": facility_id, "method": "multi_voltage_facility_split"},
+                    "name": f"{high_bus.get('name') or facility_id} {high_kv:g}/{low_kv:g} kV transformer",
+                    "power": "transformer",
+                    "from_bus_id": high_bus["id"],
+                    "to_bus_id": low_bus["id"],
+                    "voltage_kv": high_kv,
+                    "voltage_band": voltage_band(high_kv),
+                    "length_km": 0.1,
+                    "location": "facility",
+                    "circuits": None,
+                    "cables": None,
+                    "circuit_candidates": [{"voltage_kv": high_kv, "circuit_count": 1, "count_source": "inferred_facility_transformer"}],
+                    "circuit_count": 1,
+                    "circuit_count_source": "inferred_facility_transformer",
+                    "circuit_class": "inter_facility",
+                    "parameter_defaults": defaults,
+                    "endpoint_quality": [
+                        {"snap": "facility_voltage_level", "bus_id": high_bus["id"]},
+                        {"snap": "facility_voltage_level", "bus_id": low_bus["id"]},
+                    ],
+                    "provenance": "inferred_multi_voltage_facility_transformer",
+                    "confidence": 0.6,
+                }
+            )
+    return transformers
+
+
 def _generator_capacity(tags: Mapping[str, Any]) -> tuple[float | None, str | None]:
     for key in (
         "generator:output:electricity",
@@ -483,6 +549,18 @@ def _row_to_record(row: Any) -> dict[str, Any]:
     return data
 
 
+def _bus_id_for_voltage_level(base_bus_id: str, voltage_kv: float | None, voltage_levels: list[float | None]) -> str:
+    if len([value for value in voltage_levels if value is not None]) <= 1:
+        return base_bus_id
+    if voltage_kv is None:
+        return base_bus_id
+    return f"{base_bus_id}:voltage:{_format_voltage_id(voltage_kv)}"
+
+
+def _format_voltage_id(voltage_kv: float) -> str:
+    return str(int(voltage_kv)) if float(voltage_kv).is_integer() else str(voltage_kv).replace(".", "_")
+
+
 def build_topology_preview(
     rows: Iterable[Any],
     *,
@@ -503,31 +581,35 @@ def build_topology_preview(
     for record in records:
         if record["asset_kind"] != "bus_candidate":
             continue
-        bus_id = f"osm:{record['osm_type']}:{record['osm_id']}"
-        base_kv = max(record["voltage_kv"]) if record["voltage_kv"] else None
-        if _below_min_voltage(base_kv, min_voltage_kv):
-            continue
-        buses.append(
-            {
-                "id": bus_id,
-                "source": {"osm_type": record["osm_type"], "osm_id": record["osm_id"]},
-                "name": record.get("name"),
-                "power": record["power"],
-                "lat": record.get("lat"),
-                "lon": record.get("lon"),
-                "base_kv": base_kv,
-                "voltage_band": voltage_band(base_kv),
-                "service_territory": record["service_territory"],
-                "provenance": "osm",
-                "confidence": 0.85 if base_kv else 0.55,
-            }
-        )
+        base_bus_id = f"osm:{record['osm_type']}:{record['osm_id']}"
+        facility_id = base_bus_id
+        voltage_levels = record["voltage_kv"] or [None]
+        for base_kv in sorted(voltage_levels, reverse=True, key=lambda value: value or 0.0):
+            if _below_min_voltage(base_kv, min_voltage_kv):
+                continue
+            bus_id = _bus_id_for_voltage_level(base_bus_id, base_kv, voltage_levels)
+            buses.append(
+                {
+                    "id": bus_id,
+                    "source": {"osm_type": record["osm_type"], "osm_id": record["osm_id"]},
+                    "facility_id": facility_id,
+                    "name": record.get("name"),
+                    "power": record["power"],
+                    "lat": record.get("lat"),
+                    "lon": record.get("lon"),
+                    "base_kv": base_kv,
+                    "voltage_band": voltage_band(base_kv),
+                    "service_territory": record["service_territory"],
+                    "provenance": "osm_voltage_level" if len(voltage_levels) > 1 else "osm",
+                    "confidence": 0.85 if base_kv else 0.55,
+                }
+            )
         if record["power"] in {"plant", "generator"}:
             pmax_mw, capacity_tag = _generator_capacity(record["tags"])
             generators.append(
                 {
                     "id": f"gen:{record['osm_type']}:{record['osm_id']}",
-                    "bus_id": bus_id,
+                    "bus_id": _bus_id_for_voltage_level(base_bus_id, max(record["voltage_kv"]) if record["voltage_kv"] else None, voltage_levels),
                     "name": record.get("name"),
                     "source": record["tags"].get("generator:source"),
                     "method": record["tags"].get("generator:method"),
@@ -559,7 +641,7 @@ def build_topology_preview(
                 endpoint_quality.append({"snap": "missing_geometry"})
                 continue
             snap_candidates = [*buses, *synthetic_buses.values()]
-            bus_id, distance = _nearest_bus(snap_candidates, point, snap_tolerance_km)
+            bus_id, distance = _nearest_bus(snap_candidates, point, snap_tolerance_km, voltage_kv=voltage_kv)
             if bus_id is None:
                 synthetic_id = f"synthetic:{record['osm_type']}:{record['osm_id']}:{index}"
                 if synthetic_id not in synthetic_buses:
@@ -618,6 +700,7 @@ def build_topology_preview(
             }
         )
 
+    branches.extend(_inferred_facility_transformers(buses))
     buses.extend(synthetic_buses.values())
     merge_report = _merge_fragmented_circuits(branches)
     branches = merge_report["branches"]
@@ -630,6 +713,11 @@ def build_topology_preview(
     circuit_class_counts = _count_by(branches, "circuit_class")
     circuit_candidate_count = sum(len(branch.get("circuit_candidates") or []) for branch in branches)
     circuit_count_total = sum(int(branch.get("circuit_count") or 1) for branch in branches)
+    inferred_facility_transformer_count = sum(
+        1
+        for branch in branches
+        if branch.get("provenance") == "inferred_multi_voltage_facility_transformer"
+    )
     return {
         "metadata": {
             "schema": "tiangou.topology_preview.v1",
@@ -652,6 +740,7 @@ def build_topology_preview(
             "circuit_count_total": circuit_count_total,
             "merged_circuit_count": merge_report["merged_circuit_count"],
             "merged_segment_count": merge_report["merged_segment_count"],
+            "inferred_facility_transformer_count": inferred_facility_transformer_count,
         },
         "buses": buses,
         "branches": branches,
