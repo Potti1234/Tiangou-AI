@@ -81,6 +81,7 @@ def test_export_hong_kong_phase1_bundle_writes_peak_offpeak_and_manifest(tmp_pat
     assert peak["_metadata"]["include_hk_interties"] is True
     assert peak["_metadata"]["hk_intertie_derate"] == 0.5
     assert "solve_topo_json.jl" in handoff_path.read_text(encoding="utf-8")
+    assert "solve_pyg_json.jl" in handoff_path.read_text(encoding="utf-8")
     assert "gen_perturbed_data.jl" in handoff_path.read_text(encoding="utf-8")
     assert grids_solvable_path.read_text(encoding="utf-8").splitlines() == [
         f"{output_dir / 'hong_kong_16h_model.solvable.json'} 3",
