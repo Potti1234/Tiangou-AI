@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils"
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ??
   "http://127.0.0.1:8000"
+const DEMO_URL = import.meta.env.PROD ? "https://grid.lukaspottner.com" : "/dynamic"
 const HONG_KONG_CENTER: [number, number] = [114.1694, 22.3193]
 
 const BLACKOUT_FRAMES = [
@@ -278,18 +279,18 @@ export function LandingPage() {
             <Link to="/dashboard" className="transition hover:text-[#8d2024]">
               Dashboard
             </Link>
-            <Link to="/dynamic" className="transition hover:text-[#8d2024]">
+            <a href={DEMO_URL} className="transition hover:text-[#8d2024]">
               Dynamic demo
-            </Link>
+            </a>
             <Link to="/analytics" className="transition hover:text-[#8d2024]">
               Analytics
             </Link>
           </nav>
           <Button asChild className="rounded-none bg-[#1d1913] px-5 text-[#fff8e7] hover:bg-[#8d2024]">
-            <Link to="/dynamic">
+            <a href={DEMO_URL}>
               Run demo
               <ArrowRight className="size-4" />
-            </Link>
+            </a>
           </Button>
         </header>
 
@@ -311,10 +312,10 @@ export function LandingPage() {
             </p>
             <div className="mt-9 flex flex-wrap gap-3">
               <Button asChild className="rounded-none bg-[#ce4748] px-6 text-[#fff8e7] hover:bg-[#8d2024]">
-                <Link to="/dynamic">
+                <a href={DEMO_URL}>
                   Run dynamic demo
                   <ArrowRight className="size-4" />
-                </Link>
+                </a>
               </Button>
               <Button asChild variant="outline" className="rounded-none border-[#1d1913] bg-[#fff8e7]/70 px-6 text-[#1d1913] hover:bg-[#fff8e7]">
                 <Link to="/dashboard">
@@ -1009,10 +1010,10 @@ function LandingTextSections() {
             </div>
             <div className="mt-9 flex flex-wrap gap-3">
               <Button asChild className="rounded-none bg-[#fff8e7] px-6 text-[#8d2024] hover:bg-white">
-                <Link to="/dynamic">
+                <a href={DEMO_URL}>
                   Run dynamic demo
                   <ArrowRight className="size-4" />
-                </Link>
+                </a>
               </Button>
               <Button asChild variant="outline" className="rounded-none border-[#fff8e7] bg-transparent px-6 text-[#fff8e7] hover:bg-[#fff8e7]/10">
                 <Link to="/analytics">View analytics</Link>
@@ -1079,10 +1080,10 @@ function LandingTextSections() {
           <div className="flex items-center justify-between">
             <img src={tiangouLogo} alt="" aria-hidden="true" className="h-14 w-14 invert" />
             <Button asChild className="rounded-none bg-[#fff8e7] px-6 text-[#8d2024] hover:bg-white">
-              <Link to="/dynamic">
+              <a href={DEMO_URL}>
                 Run demo
                 <ArrowRight className="size-4" />
-              </Link>
+              </a>
             </Button>
           </div>
           <div className="max-w-6xl pb-10">
