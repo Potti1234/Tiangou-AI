@@ -326,25 +326,6 @@ export function LandingPage() {
             </div>
           </div>
 
-          <aside className="mb-10 hidden max-w-sm justify-self-end border border-[#1d1913]/45 bg-[#efe8d3]/86 p-4 shadow-[8px_8px_0_rgba(29,25,19,0.18)] backdrop-blur-[2px] lg:block">
-            <div className="flex items-center justify-between border-b border-[#1d1913]/30 pb-3 text-xs font-semibold uppercase tracking-[0.08em] text-[#3b352d]">
-              <span>Scroll simulation</span>
-              <span>00:00</span>
-            </div>
-            <div className="mt-4 grid grid-cols-[1fr_auto_1fr] gap-3 text-sm">
-              <div>
-                <div className="text-[#8d2024]">Uncontrolled</div>
-                <div className="mt-2 h-1.5 bg-[#8d2024]" />
-                <p className="mt-3 text-xs leading-5 text-[#3b352d]">Frequency collapse, no corrective action.</p>
-              </div>
-              <div className="h-full w-px bg-[#1d1913]/35" />
-              <div>
-                <div className="text-[#1f8f54]">Stabilized</div>
-                <div className="mt-2 h-1.5 bg-[#1f8f54]" />
-                <p className="mt-3 text-xs leading-5 text-[#3b352d]">Producer and load actions hold the system.</p>
-              </div>
-            </div>
-          </aside>
         </div>
       </section>
       <BlackoutColdOpen />

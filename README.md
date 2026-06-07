@@ -1,35 +1,69 @@
 # Tiangou AI
 
-**Live demo: https://eurotech.lukaspottner.com/**
+Tiangou AI is a Hong Kong electricity-grid modeling and simulation project. It combines a FastAPI backend for public-data grid reconstruction, a main React dashboard for topology and dynamic-simulation analysis, and a separate HK grid simulator demo used for the public grid subdomain.
 
-AI-guided frequency stability system for the Hong Kong power grid. Tiangou AI uses a Physics-Informed Neural Network to predict frequency trajectories 60 seconds ahead and dispatch corrective actions before a disturbance turns into a blackout.
+Live sites:
 
----
+- Main site: https://eurotech.lukaspottner.com/
+- Grid simulator: https://grid.lukaspottner.com/
 
-## What it does
+## Project Structure
 
-Power grids must keep frequency within a narrow band. When generation and demand go out of balance, frequency drops. If it falls too far, protection relays trip generators automatically — which can cascade into a full blackout.
+| Path | Purpose |
+|---|---|
+| `app/` | Main FastAPI application for OSM ingest, assumptions, topology reconstruction, PowerModels/GridSFM export, analytics, and dynamic simulation. |
+| `frontend/` | Main React/Vite frontend for the landing page, map dashboard, analytics, and dynamic simulation views. |
+| `hk_grid_backend/` | Standalone FastAPI simulation backend for the HK grid demo. |
+| `hk_grid_frontend/` | Standalone React/Vite frontend for the HK grid simulator demo. |
+| `data/` | Public raw datasets and assumption tables used by the main backend. Runtime SQLite files and processed outputs are not committed. |
+| `tests/` | Pytest coverage for the main backend, topology, assumptions, exports, dynamic simulation, and API behavior. |
+| `third_party/gridsfm_solver/` | Vendored GridSFM Julia solver handoff scripts and license files. |
+| `pinn/` | PINN training and experiment code/artifacts kept separate from the production `app/` package. |
+| `docker-compose.yml` | Main deployment: `app/` API plus `frontend/`. |
+| `docker-compose.hk-grid.yml` | HK simulator deployment: `hk_grid_backend/` plus `hk_grid_frontend/`. |
+| `HONESTY.md` | Hackathon disclosure of what is real, inferred, mocked, or approximate. |
 
-Tiangou AI runs a real-time risk score every second based on the predicted frequency minimum, inferred grid dynamics, and current frequency. When the score breaches a threshold, it dispatches the minimum set of corrective actions immediately — often 30–60 seconds before classical rate-of-change detectors would fire.
+## Main App
 
-The simulation runs two parallel timelines side by side: one with no intervention, one with Tiangou AI active. The difference in outcomes is what the system is evaluated against.
+The main app is the GridSFM/topology dashboard and landing site.
 
----
+### Local Backend
 
-## Architecture
+```bash
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cpu
+pip install -e ".[dev]"
+uvicorn app.main:app --reload --port 8000
+```
 
-| Component | Description | Port |
-|---|---|---|
-| `hk_grid_backend/` | Simulation engine with hardcoded HK grid config and scenario runner | 8000 |
-| `app/` | FastAPI backend — OSM grid ingestion, PINN, dynamic simulation | 8001 |
-| `hk_grid_frontend/` | Primary React dashboard — dual-panel comparison with HK Leaflet map | 5173 |
-| `frontend/` | Landing page | — |
+### Local Frontend
 
----
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-## Quick start
+The frontend uses `VITE_API_BASE_URL` when set. In Docker, it is built with `VITE_API_BASE_URL=/api` and nginx proxies `/api` to the main API.
 
-### Simulation backend (hk_grid_backend)
+### Docker
+
+```bash
+docker compose up --build -d
+```
+
+Main site URL:
+
+```text
+http://localhost:8080
+```
+
+## HK Grid Simulator
+
+This is the separate simulator shown on the grid subdomain.
+
+### Local Backend
 
 ```bash
 cd hk_grid_backend
@@ -37,9 +71,7 @@ pip install -r requirements.txt
 uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-Scenarios available: `combined_stress`, `coal_plant_trip`, `mainland_disconnect`, `datacenter_spike`, `typhoon_wind_loss`, `solar_cloud_ramp`
-
-### Primary frontend
+### Local Frontend
 
 ```bash
 cd hk_grid_frontend
@@ -47,60 +79,53 @@ npm install
 npm run dev
 ```
 
-Opens at `http://localhost:5173`. Requires the simulation backend running on port 8000.
+Local frontend URL:
 
-### OSM-derived backend (app/)
-
-```bash
-python -m venv .venv
-source .venv/bin/activate          # or .\.venv\Scripts\Activate.ps1 on Windows
-pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cpu
-pip install -e ".[dev]"
-uvicorn app.main:app --reload --port 8001
+```text
+http://localhost:5173
 ```
 
----
-
-## Hong Kong grid
-
-The grid topology was reconstructed from OpenStreetMap data — real transmission distances, node locations, and generation mix:
-
-- **Lamma Power Station** — coal/gas, ~3,700 MW
-- **Castle Peak Power Station** — coal/gas, northwest New Territories
-- **Black Point Power Station** — CCGT, northwest New Territories
-- **Daya Bay Nuclear** — import connection from mainland China
-- **Offshore wind, solar, grid-scale battery storage**
-
-The OSM ingestion pipeline is available via the `app/` backend:
-
-```bash
-curl -X POST http://127.0.0.1:8001/ingest/hong-kong
-```
-
----
-
-## Docker
-
-```bash
-docker compose up --build
-```
-
-Services exposed by the root Compose file:
-
-| Service | URL |
-|---|---|
-| Landing/GridSFM frontend | `http://localhost:8080` |
-
-To deploy only the HK grid simulation backend and dashboard:
+### Docker
 
 ```bash
 docker compose -f docker-compose.hk-grid.yml up --build -d
 ```
 
-The HK grid dashboard is exposed at `http://localhost:8082`. The HK backend stays internal to that Compose deployment on port `8000`; nginx proxies `/api/*` and `/ws/*` to `hk-grid-backend:8000`. No environment variables are required for `hk_grid_backend/` or `hk_grid_frontend/`.
+Grid simulator URL:
 
----
+```text
+http://localhost:8082
+```
 
-## PINN checkpoint
+The HK frontend nginx container proxies `/api/*` and `/ws/*` to `hk-grid-backend:8000`. The backend is internal to the Compose network and does not need a public host port.
 
-The Physics-Informed Neural Network checkpoint is at `app/dynamic/pinn_checkpoint.pt`. It requires the CPU PyTorch wheel — the same wheel installed in the setup above and in the Docker image.
+## Environment Variables
+
+| Variable | Used by | Required | Notes |
+|---|---|---:|---|
+| `TIANGOU_DATABASE_PATH` | Main Docker API | Yes in Docker | Set by `docker-compose.yml` to `/data/tiangou.sqlite3`. |
+| `VITE_API_BASE_URL` | Main frontend build | Optional | Defaults to local API in dev; Docker sets it to `/api`. |
+
+No environment variables are required for `hk_grid_backend/` or `hk_grid_frontend/`.
+
+## Tests
+
+```bash
+pytest
+```
+
+Frontend build checks:
+
+```bash
+cd frontend
+npm run build
+```
+
+```bash
+cd hk_grid_frontend
+npm run build
+```
+
+## Notes
+
+Read `HONESTY.md` for the full disclosure of model assumptions, public data sources, synthetic topology, solver sanitization, and known limitations.
