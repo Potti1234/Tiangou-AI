@@ -85,7 +85,21 @@ curl -X POST http://127.0.0.1:8001/ingest/hong-kong
 docker compose up --build
 ```
 
-Opens at `http://localhost:8080`. The frontend is served by nginx and proxies `/api/*` to the FastAPI service.
+Services exposed by the root Compose file:
+
+| Service | URL |
+|---|---|
+| Landing/GridSFM frontend | `http://localhost:8080` |
+| HK grid simulation backend | `http://localhost:8000` |
+| HK grid dashboard | `http://localhost:8082` |
+
+The HK grid dashboard is served by nginx and proxies `/api/*` and `/ws/*` to the `hk-grid-backend` service. No environment variables are required for `hk_grid_backend/` or `hk_grid_frontend/`; the frontend uses relative `/api` paths and the backend uses committed local config/checkpoint files.
+
+To deploy only the HK grid simulation backend and dashboard:
+
+```bash
+docker compose -f docker-compose.hk-grid.yml up --build -d
+```
 
 ---
 
