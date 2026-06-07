@@ -1,5 +1,8 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Leaflet tile images must not inherit box-sizing reset */
+.leaflet-container img { box-sizing: content-box; }
+
 :root {
   --bg-deep:    #07090f;
   --bg-panel:   #0d1117;
