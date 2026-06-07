@@ -418,7 +418,7 @@ export function DynamicSimulationPage() {
       setResult(payload)
       setGridSource(payload.grid_source)
       setPinnStatus(payload.pinn_status)
-      setCursor(Math.min(30, Math.max(payload.frames.length - 1, 0)))
+      setCursor(Math.max(payload.frames.length - 1, 0))
       setPlaying(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not run dynamic simulation")
@@ -457,6 +457,15 @@ export function DynamicSimulationPage() {
   const selected = scenarios.find((scenario) => scenario.id === selectedScenario)
   const frames = result?.frames ?? []
   const currentFrame = frames[Math.min(cursor, Math.max(frames.length - 1, 0))]
+  const togglePlayback = useCallback(() => {
+    if (!frames.length) return
+    if (cursor >= frames.length - 1) {
+      setCursor(0)
+      setPlaying(true)
+      return
+    }
+    setPlaying((value) => !value)
+  }, [cursor, frames.length])
   const actions = useMemo(() => frames.slice(0, cursor + 1).flatMap((frame) => frame.actions_taken.map((action) => ({ t: frame.t, action }))), [cursor, frames])
   const chartData = useMemo(() => frames.map((frame) => ({
     t: frame.t,
@@ -561,7 +570,7 @@ export function DynamicSimulationPage() {
                 </LineChart>
               </ChartContainer>
               <div className="mt-3 flex items-center gap-2">
-                <Button type="button" size="sm" variant="outline" onClick={() => setPlaying((value) => !value)} disabled={!frames.length} className="h-8 rounded-[4px] border-zinc-300 bg-white">
+                <Button type="button" size="sm" variant="outline" onClick={togglePlayback} disabled={!frames.length} className="h-8 rounded-[4px] border-zinc-300 bg-white">
                   <Play className="size-4" />
                   {playing ? "Pause" : "Play"}
                 </Button>
@@ -965,9 +974,9 @@ function OutcomePanel({ label, outcome, state }: { label: string; outcome?: stri
   return (
     <Card className="rounded-[8px] bg-[#fbfbfa]">
       <CardContent className="space-y-2 p-3">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-semibold">{label}</span>
-          <Badge variant="outline" className={cn("rounded-[3px] px-2 py-1", outcomeClass(outcome))}>
+        <div className="grid min-h-8 grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
+          <span className="min-w-0 text-sm font-semibold leading-tight">{label}</span>
+          <Badge variant="outline" className={cn("shrink-0 rounded-[3px] px-1.5 py-1 text-[0.68rem] leading-none", outcomeClass(outcome))}>
             {outcome ?? "PENDING"}
           </Badge>
         </div>

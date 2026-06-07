@@ -3,7 +3,9 @@ from fastapi.testclient import TestClient
 from app import main
 from app.dynamic.adapter import build_dynamic_config
 from app.dynamic.dispatch import DispatchEngine
+from app.dynamic.dual_timeline import DualTimelineSimulation
 from app.dynamic.scenarios import build_scenarios
+from app.dynamic.thresholds import freq_band
 
 
 def _synthetic_case() -> dict:
@@ -113,6 +115,25 @@ def test_dynamic_dispatch_regulates_against_pinn_trajectory() -> None:
     assert all("_baseline_nadir_hz" in action for action in actions)
     assert all("_predicted_nadir_hz" in action for action in actions)
     assert actions[0]["id"] in {"shed_ev_charging", "fast_demand_response"}
+
+
+def test_dynamic_protected_timeline_recovers_from_large_source_trip() -> None:
+    config = build_dynamic_config(_synthetic_case(), _consumer_proxies())
+    scenarios = {scenario["id"]: scenario for scenario in build_scenarios(config)}
+
+    result = DualTimelineSimulation(_FixedPinn(), config.grid_config, config.demand_profile_mw, config.ev_stations).run(
+        scenarios["largest_generator_trip"],
+        duration_s=120,
+    )
+
+    assert result["outcome_A"] == "BLACKOUT"
+    assert result["outcome_B"] == "STABLE"
+    assert result["frames"][-1]["B"]["f"] >= 49.4
+
+
+def test_frequency_band_does_not_label_overfrequency_as_blackout() -> None:
+    assert freq_band(51.0) == "OVERFREQUENCY"
+    assert freq_band(48.9) == "BLACKOUT"
 
 
 def test_dynamic_api_scenarios_and_simulation(monkeypatch) -> None:

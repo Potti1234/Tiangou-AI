@@ -12,6 +12,7 @@ H_THRESHOLDS = {
 
 ROCOF_CASCADE = 0.5
 FREQ_NORMAL_HI = 50.2
+FREQ_ALERT_HI = 50.5
 FREQ_NORMAL_LO = 49.8
 FREQ_ALERT_LO = 49.5
 FREQ_UFLS_LO = 49.0
@@ -20,6 +21,10 @@ FREQ_UFLS_LO = 49.0
 def freq_band(f: float) -> str:
     if FREQ_NORMAL_LO <= f <= FREQ_NORMAL_HI:
         return "NORMAL"
+    if FREQ_NORMAL_HI < f <= FREQ_ALERT_HI:
+        return "ALERT"
+    if f > FREQ_ALERT_HI:
+        return "OVERFREQUENCY"
     if FREQ_ALERT_LO <= f < FREQ_NORMAL_LO:
         return "ALERT"
     if FREQ_UFLS_LO <= f < FREQ_ALERT_LO:
@@ -42,4 +47,3 @@ def risk_level_from_score(score: float) -> str:
     if score >= 0.1:
         return "WATCH"
     return "NORMAL"
-

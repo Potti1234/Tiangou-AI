@@ -159,12 +159,7 @@ def _build_actions(grid_config: dict[str, Any], ev_shed_mw: float) -> list[dict[
 
 
 def _lead_time_for_source(source: dict[str, Any]) -> int:
-    source_type = source.get("type")
-    if source_type in {"gas_ccgt", "other_dispatchable", "generic_capacity_equivalent"}:
-        return 60
-    if source_type == "coal":
-        return 120
-    return 30
+    return 1
 
 
 def _generation_ramp_time_s(action: dict[str, Any]) -> int:
