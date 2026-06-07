@@ -27,17 +27,5 @@ services:
       - "8080:80"
     restart: unless-stopped
 
-  dashboard-v18:
-    build:
-      context: ./tiangou-ai-dashboard-v18
-      args:
-        VITE_BACKEND_URL: /api
-    depends_on:
-      api:
-        condition: service_healthy
-    ports:
-      - "8081:80"
-    restart: unless-stopped
-
 volumes:
   tiangou-data:

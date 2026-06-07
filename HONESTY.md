@@ -36,7 +36,6 @@ Features that run end-to-end on the live app, with real code and explicit data/p
 - **PINN frequency trajectory prediction.** `app/dynamic/pinn_model.py` defines a 12,930-parameter PyTorch PINN with learned effective inertia `H`. `app/dynamic/pinn_predict.py` rolls out 60-second frequency forecasts during simulation. If PyTorch or the checkpoint is unavailable, the API reports that status and uses a small fallback model instead of hiding the failure.
 - **Baseline weak-spot study.** `/studies/baseline-weak-spots` computes deterministic heuristic risk rankings for branches and buses from the assembled case. This is real code, but it is not a full N-1, hosting-capacity, or OPF security study.
 - **Main React dashboard.** The `frontend/` app uses React, Vite, MapLibre, TanStack Router, Recharts, Tailwind, Lucide icons, and local shadcn-style UI primitives. It shows raw/reconstructed/solver map layers, important consumer markers, assumption transparency, analytics charts, weak spots, dynamic simulation, and solver artifact status.
-- **Separate prototype dashboard.** `tiangou-ai-dashboard-v18/` is a standalone prototype dashboard folder. It is present in the repo, but it is not the main FastAPI/React app.
 - **Tests/build.** The repository contains pytest coverage for API endpoints, assumptions, data sources, topology, PowerModels export, GridSFM handoff utilities, dynamic simulation, and frontend source contracts. The main frontend has a real `npm run build` script.
 
 ---
@@ -67,7 +66,6 @@ Every known shortcut is listed here. These are not hidden mocks; they are explic
 | Solver sanitization | `app/gridsfm_case_tools.py`, `app/export_powermodels.py` | The visually complete raw OSM-derived model is not always AC-feasible. Solver exports remove/relax passive islands, large inferred shunts, short synthetic-branch charging, generator Q ranges, and reference buses. | Make the raw model AC-feasible using real topology, real equipment parameters, correct voltage conversion, actual shunts/reactive devices, and validated generator controls. |
 | Baseline weak-spot scoring | `app/studies/baseline.py` | We needed an explainable demo risk signal before implementing full contingency/hosting-capacity solvers. | Run power-flow/OPF-based N-1 security analysis, thermal overload studies, voltage stability studies, hosting-capacity sweeps, and uncertainty analysis. |
 | Generated processed artifacts are local outputs, not source data | `data/processed/` | Solver JSON, PyG, diagnostics, scenarios, and experiment outputs are generated from the app and ignored by git. | Recompute artifacts from committed code/data during reproducible runs or publish immutable releases separately. |
-| Separate dashboard prototype | `tiangou-ai-dashboard-v18/` | A colleague's prototype dashboard is included for reference but is not wired into the main FastAPI/React app. | Integrate deliberately or keep it as a separately documented project/package. |
 
 ---
 

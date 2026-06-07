@@ -23,7 +23,6 @@ The simulation runs two parallel timelines side by side: one with no interventio
 | `hk_grid_backend/` | Simulation engine with hardcoded HK grid config and scenario runner | 8000 |
 | `app/` | FastAPI backend — OSM grid ingestion, PINN, dynamic simulation | 8001 |
 | `hk_grid_frontend/` | Primary React dashboard — dual-panel comparison with HK Leaflet map | 5173 |
-| `tiangou-ai-dashboard-v18/` | Alternative React dashboard | 5174 |
 | `frontend/` | Landing page | — |
 
 ---
