@@ -24,6 +24,7 @@ def build_dynamic_config(
     base_mva = float(powermodels_case.get("baseMVA") or 100.0)
     sources = [_source_from_generator(source_id, gen, base_mva) for source_id, gen in powermodels_case.get("gen", {}).items()]
     total_demand = _total_case_demand_mw(powermodels_case)
+    sources = _apply_merit_order_dispatch(sources, total_demand)
     demand_profile = _build_demand_profile(powermodels_case, total_demand)
     if demand_snapshot == "overnight_04h" and 4 in demand_profile:
         start_demand = demand_profile[4]
@@ -67,6 +68,49 @@ def build_dynamic_config(
     )
 
 
+_DISPATCH_PRIORITY: dict[str, int] = {
+    "offshore_wind": 0,
+    "solar_pv": 0,
+    "nuclear": 1,
+    "imports": 2,
+    "coal": 3,
+    "gas_ccgt": 4,
+    "other_dispatchable": 5,
+    "bess": 6,
+    "generic_capacity_equivalent": 10,
+}
+
+
+def _apply_merit_order_dispatch(sources: list[dict[str, Any]], total_demand_mw: float) -> list[dict[str, Any]]:
+    """Dispatch sources in merit order until generation matches demand.
+
+    When pg=0 in the PowerModels case (no OPF has been run), every generator
+    falls back to pmax in _source_from_generator, causing massive overgeneration.
+    This function replaces those outputs with a simple merit-order dispatch so
+    the simulation starts near 50 Hz.
+    """
+    if total_demand_mw <= 0:
+        return sources
+
+    ranked = sorted(sources, key=lambda s: _DISPATCH_PRIORITY.get(s["type"], 5))
+    remaining = total_demand_mw
+    id_to_output: dict[str, float] = {}
+
+    for source in ranked:
+        cap = source["capacity_mw"]
+        if remaining <= 0 or cap <= 0:
+            id_to_output[source["source_id"]] = 0.0
+        else:
+            dispatched = min(cap, remaining)
+            id_to_output[source["source_id"]] = round(dispatched, 3)
+            remaining -= dispatched
+
+    return [
+        {**s, "current_output_mw": id_to_output.get(s["source_id"], 0.0)}
+        for s in sources
+    ]
+
+
 def _source_from_generator(source_id: str, gen: dict[str, Any], base_mva: float) -> dict[str, Any]:
     pmax_mw = max(float(gen.get("pmax") or 0.0) * base_mva, 0.0)
     output_mw = max(float(gen.get("pg") or gen.get("pmax") or 0.0) * base_mva, 0.0)
@@ -101,7 +145,10 @@ def _normalize_source_type(gen: dict[str, Any]) -> str:
         return "gas_ccgt"
     if "nuclear" in text:
         return "nuclear"
-    if "import" in text or "equivalent_import_or_local_supply" in text:
+    # Territory-level capacity equivalents are synthetic placeholders — treat as last-resort
+    if "capacity_equivalent" in text or "territory_equivalent" in text or "island_local_supply_equivalent" in text:
+        return "generic_capacity_equivalent"
+    if "import" in text:
         return "imports"
     if "wind" in text:
         return "offshore_wind"

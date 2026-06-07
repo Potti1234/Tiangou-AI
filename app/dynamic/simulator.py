@@ -56,6 +56,8 @@ class GridSimulator:
         for source in self.get_all_sources():
             if not source.get("online"):
                 continue
+            if source.get("type") == "generic_capacity_equivalent":
+                continue  # synthetic placeholder — no physical inertia
             h = float(source.get("H") or 0.0)
             if h <= 0.0:
                 continue
@@ -98,15 +100,18 @@ class GridSimulator:
 
     def _balance_generation(self) -> None:
         pe = self.compute_Pe()
+        # generic_capacity_equivalent is a synthetic PowerModels placeholder — treat as fixed at its
+        # merit-order output (0 MW) and never rebalance it. Including it here distributes real load
+        # onto a phantom node and gives fake headroom to the governor.
         fixed = sum(
             float(s.get("current_output_mw") or 0.0)
             for s in self.get_all_sources()
-            if s.get("online") and s.get("type") in {"offshore_wind", "solar_pv", "nuclear", "imports"}
+            if s.get("online") and s.get("type") in {"offshore_wind", "solar_pv", "nuclear", "imports", "generic_capacity_equivalent"}
         )
         needed = max(0.0, pe - fixed)
         dispatchable = [
             s for s in self.get_all_sources()
-            if s.get("online") and s.get("type") in {"coal", "gas_ccgt", "other_dispatchable", "generic_capacity_equivalent"}
+            if s.get("online") and s.get("type") in {"coal", "gas_ccgt", "other_dispatchable"}
         ]
         cap = sum(float(s.get("capacity_mw") or 0.0) for s in dispatchable)
         if cap <= 0:
@@ -117,9 +122,10 @@ class GridSimulator:
 
     def _governor_response(self) -> float:
         delta_f = self.F0 - self.f
+        # Exclude generic_capacity_equivalent — it is a synthetic node with no real governor or spinning reserve.
         sources = [
             s for s in self.get_all_sources()
-            if s.get("online") and s.get("type") in {"coal", "gas_ccgt", "nuclear", "imports", "other_dispatchable", "generic_capacity_equivalent"}
+            if s.get("online") and s.get("type") in {"coal", "gas_ccgt", "nuclear", "imports", "other_dispatchable"}
         ]
         if not sources:
             self._gov_output = 0.0

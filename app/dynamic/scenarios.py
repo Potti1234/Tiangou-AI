@@ -5,6 +5,14 @@ from typing import Any
 from app.dynamic.adapter import DynamicGridConfig
 
 
+def _output_mw(source: dict[str, Any]) -> float:
+    """Return dispatched output, never falling back to capacity when output is explicitly 0."""
+    out = source.get("current_output_mw")
+    if out is not None:
+        return float(out)
+    return float(source.get("capacity_mw") or 0.0)
+
+
 def build_scenarios(config: DynamicGridConfig) -> list[dict[str, Any]]:
     sources = config.grid_config.get("sources", [])
     scenarios = [
@@ -28,8 +36,8 @@ def _largest_generator_trip(sources: list[dict[str, Any]]) -> dict[str, Any]:
     candidates = [s for s in sources if s.get("online") and s.get("H", 0) > 0]
     if not candidates:
         return _unavailable("largest_generator_trip", "No online synchronous generator is present in the dynamic config.")
-    source = max(candidates, key=lambda row: float(row.get("current_output_mw") or row.get("capacity_mw") or 0.0))
-    magnitude = -float(source.get("current_output_mw") or source.get("capacity_mw") or 0.0)
+    source = max(candidates, key=lambda row: _output_mw(row))
+    magnitude = -_output_mw(source)
     return _scenario(
         "largest_generator_trip",
         f"Trip largest synchronous source: {source['name']}",
@@ -46,8 +54,8 @@ def _import_loss(sources: list[dict[str, Any]]) -> dict[str, Any]:
     candidates = [s for s in sources if s.get("type") in {"imports", "nuclear"} and s.get("online")]
     if not candidates:
         return _unavailable("import_loss", "No import/equivalent supply source exists in the current grid-derived case.")
-    source = max(candidates, key=lambda row: float(row.get("current_output_mw") or row.get("capacity_mw") or 0.0))
-    magnitude = -float(source.get("current_output_mw") or source.get("capacity_mw") or 0.0)
+    source = max(candidates, key=lambda row: _output_mw(row))
+    magnitude = -_output_mw(source)
     return _scenario("import_loss", f"Loss of import/equivalent source: {source['name']}", "generation_loss", [source], magnitude, "step", "PowerModels import/equivalent generator.", "Treats equivalent imports as synchronous supply for frequency dynamics.")
 
 
@@ -87,7 +95,7 @@ def _renewable_weather_loss(sources: list[dict[str, Any]]) -> dict[str, Any]:
     candidates = [s for s in sources if s.get("weather_dependent") and s.get("online")]
     if not candidates:
         return _unavailable("renewable_weather_loss", "No online wind or solar source exists in the current grid-derived case.")
-    magnitude = -sum(float(s.get("current_output_mw") or s.get("capacity_mw") or 0.0) for s in candidates)
+    magnitude = -sum(_output_mw(s) for s in candidates)
     return _scenario("renewable_weather_loss", "Weather-driven renewable ramp-down", "generation_loss", candidates, magnitude, "ramp", "PowerModels wind/solar sources mapped as weather dependent.", "Ramps down current renewable output over 60 seconds.", ramp_time_s=60)
 
 
