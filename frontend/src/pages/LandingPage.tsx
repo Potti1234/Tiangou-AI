@@ -7,6 +7,10 @@ import blackoutFrame02 from "@/assets/landing/spain-blackout-frame-02-partial.pn
 import blackoutFrame03 from "@/assets/landing/spain-blackout-frame-03-cascade.png"
 import blackoutFrame04 from "@/assets/landing/spain-blackout-frame-04-dark.png"
 import heroBackground from "@/assets/landing-hero-bg.png"
+import symbolHongKongRisk from "@/assets/landing/symbol-hong-kong-risk.png"
+import symbolInertia from "@/assets/landing/symbol-inertia.png"
+import symbolMethod from "@/assets/landing/symbol-method.png"
+import symbolProvenance from "@/assets/landing/symbol-provenance.png"
 import tiangouLogo from "@/assets/tiangou-logo-transparent-no-text.png"
 import { Button } from "@/components/ui/button"
 import { Map as GeoMap, MapMarker, MapRoute, MarkerContent } from "@/components/ui/map"
@@ -344,6 +348,7 @@ export function LandingPage() {
       </section>
       <BlackoutColdOpen />
       <DisturbanceSimulation />
+      <LandingTextSections />
     </main>
   )
 }
@@ -932,6 +937,273 @@ function LandingMapMarker({ marker }: { marker: LandingMarker }) {
       ) : (
         <Icon className="size-3.5 text-[#0f1212]" strokeWidth={2.4} />
       )}
+    </div>
+  )
+}
+
+function LandingTextSections() {
+  return (
+    <>
+      <TextImageSection
+        image={symbolInertia}
+        imageAlt=""
+        title="Grids fail when physics runs out of margin."
+        lead="Frequency is the visible signal. Inertia is the hidden buffer."
+        body={[
+          "Large rotating generators behave like heavy wheels. They slow down frequency changes after a shock. As coal and gas units retire, the same disturbance can move frequency faster.",
+          "Tiangou treats the grid as a physical system first. The model estimates inertia from frequency dynamics, then tests whether the operating state can absorb the next disturbance.",
+        ]}
+        facts={[
+          "Stable frequency is not the same as safe frequency.",
+          "Low inertia reduces the time operators have to act.",
+          "A useful warning has to arrive before the cascade is visible.",
+        ]}
+      />
+
+      <TextImageSection
+        image={symbolHongKongRisk}
+        imageAlt=""
+        title="Hong Kong is the right first grid to prove it."
+        lead="Dense load, weather exposure, imported energy, and critical infrastructure sit on the same island-scale system."
+        body={[
+          "The risk is not only more renewable energy. It is renewable energy arriving at the same time as data-center demand, EV charging, hospitals, transport, and typhoon exposure.",
+          "Our current model already brings those layers into one view: reconstructed grid topology, generators, demand assumptions, hospitals, EV charging stations, and other consumer proxies.",
+        ]}
+        facts={[
+          "Coal generation is planned to phase out by 2035.",
+          "Hospitals and transport loads need protected behavior.",
+          "Flexible demand, such as EV charging, can become a stabilizing tool.",
+        ]}
+        reverse
+      />
+
+      <section className="snap-start bg-[#ce4748] text-[#fff8e7]">
+        <div className="mx-auto grid min-h-[100svh] w-full max-w-[1720px] items-center gap-10 px-5 py-20 sm:px-8 lg:grid-cols-[0.9fr_1.1fr] lg:px-10">
+          <div>
+            <img
+              src={symbolMethod}
+              alt=""
+              aria-hidden="true"
+              loading="lazy"
+              className="mx-auto max-h-[440px] w-full max-w-[520px] object-contain mix-blend-multiply"
+            />
+          </div>
+          <div className="max-w-3xl">
+            <p className="text-base font-semibold text-[#fff8e7]/78">What the platform does</p>
+            <h2 className="mt-4 font-['Vercetti',Geist,ui-sans-serif] text-[clamp(3rem,6vw,5.6rem)] leading-[0.9] tracking-[-0.03em]">
+              Estimate. Stress. Intervene.
+            </h2>
+            <div className="mt-10 grid gap-5">
+              <ProofLine
+                title="Estimate inertia from frequency dynamics."
+                body="The PINN layer loads the trained checkpoint when available and exposes the estimated inertia used by the dynamic demo."
+              />
+              <ProofLine
+                title="Run stress cases on the reconstructed Hong Kong grid."
+                body="The landing simulation calls the same backend scenario and dashboard snapshot endpoints as the working demo."
+              />
+              <ProofLine
+                title="Show corrective actions as grid state changes."
+                body="The story highlights generator state, protected hospital loads, and EV charging curtailment as the scenario advances."
+              />
+            </div>
+            <div className="mt-9 flex flex-wrap gap-3">
+              <Button asChild className="rounded-none bg-[#fff8e7] px-6 text-[#8d2024] hover:bg-white">
+                <Link to="/dynamic">
+                  Run dynamic demo
+                  <ArrowRight className="size-4" />
+                </Link>
+              </Button>
+              <Button asChild variant="outline" className="rounded-none border-[#fff8e7] bg-transparent px-6 text-[#fff8e7] hover:bg-[#fff8e7]/10">
+                <Link to="/analytics">View analytics</Link>
+              </Button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="snap-start bg-[#efe8d3] text-[#1d1913]">
+        <div className="mx-auto grid min-h-[100svh] w-full max-w-[1720px] items-center gap-12 px-5 py-20 sm:px-8 lg:grid-cols-[1fr_1fr] lg:px-10">
+          <div className="max-w-3xl">
+            <p className="text-base font-semibold text-[#8d2024]">Optimization target</p>
+            <h2 className="mt-4 font-['Vercetti',Geist,ui-sans-serif] text-[clamp(3rem,6vw,5.6rem)] leading-[0.9] tracking-[-0.03em]">
+              Same stability. Less fuel.
+            </h2>
+            <p className="mt-7 max-w-[64ch] text-lg leading-8 text-[#3b352d]">
+              The long-term operating question is precise: what is the minimum conventional generation needed to keep the grid stable while maximizing renewable energy?
+            </p>
+            <p className="mt-5 max-w-[64ch] text-base leading-7 text-[#3b352d]">
+              Today the demo shows stress response and corrective action logic. The next solver layer turns that into dispatch recommendations: when to hold inertia support, when to curtail flexible demand, and when renewable output can safely carry more load.
+            </p>
+          </div>
+          <div className="border border-[#1d1913]/28 bg-[#fff8e7]/72 p-5">
+            <DispatchComparison />
+          </div>
+        </div>
+      </section>
+
+      <TextImageSection
+        image={symbolProvenance}
+        imageAlt=""
+        title="The assumptions stay visible."
+        lead="A useful grid model has to show what is measured, inferred, and synthetic."
+        body={[
+          "The repo is built around that distinction. Raw OSM assets, reconstructed circuits, solver handoff artifacts, consumer proxies, and validation warnings all remain inspectable.",
+          "That honesty matters for a judge and for a grid operator. A model can be ambitious without pretending every cable rating, transformer setting, and demand profile is already public data.",
+        ]}
+        facts={[
+          "Observed public data is separated from inferred topology.",
+          "Synthetic assumptions are counted and surfaced.",
+          "Solver artifacts can be inspected from the dashboard.",
+        ]}
+      />
+
+      <section className="snap-start bg-[#1d1913] text-[#fff8e7]">
+        <div className="mx-auto grid min-h-[100svh] w-full max-w-[1720px] items-center gap-10 px-5 py-20 sm:px-8 lg:grid-cols-[0.9fr_1.1fr] lg:px-10">
+          <div className="max-w-xl">
+            <p className="text-base font-semibold text-[#ce4748]">Implementation path</p>
+            <h2 className="mt-4 font-['Vercetti',Geist,ui-sans-serif] text-[clamp(3rem,6vw,5.6rem)] leading-[0.9] tracking-[-0.03em]">
+              Hong Kong first. Greater Bay Area next.
+            </h2>
+          </div>
+          <div className="grid gap-4">
+            <MarketStep title="Build in Hong Kong" body="Use local grid topology, renewable generation, weather exposure, consumer proxies, and frequency data as the validation base." />
+            <MarketStep title="Validate with operators and infrastructure partners" body="Turn the demo pipeline into a repeatable planning tool: scenario generation, dynamic stability screening, and assumption review." />
+            <MarketStep title="Scale into Mainland China" body="Apply the same workflow to larger renewable-heavy systems where low-inertia operation is becoming a national priority." />
+          </div>
+        </div>
+      </section>
+
+      <section className="snap-start bg-[#ce4748] text-[#fff8e7]">
+        <div className="mx-auto flex min-h-[100svh] w-full max-w-[1720px] flex-col justify-between px-5 py-8 sm:px-8 lg:px-10">
+          <div className="flex items-center justify-between">
+            <img src={tiangouLogo} alt="" aria-hidden="true" className="h-14 w-14 invert" />
+            <Button asChild className="rounded-none bg-[#fff8e7] px-6 text-[#8d2024] hover:bg-white">
+              <Link to="/dynamic">
+                Run demo
+                <ArrowRight className="size-4" />
+              </Link>
+            </Button>
+          </div>
+          <div className="max-w-6xl pb-10">
+            <h2 className="font-['Vercetti',Geist,ui-sans-serif] text-[clamp(4rem,10vw,6rem)] leading-[0.88] tracking-[-0.03em]">
+              Spain happened. Hong Kong won't.
+            </h2>
+            <p className="mt-8 max-w-2xl text-[clamp(1.5rem,2.5vw,2.4rem)] leading-tight text-[#fff8e7]/86">
+              In the legend, people made noise to bring the light back. Today, Tiangou keeps the lights on.
+            </p>
+          </div>
+        </div>
+      </section>
+    </>
+  )
+}
+
+function TextImageSection({
+  image,
+  imageAlt,
+  title,
+  lead,
+  body,
+  facts,
+  reverse = false,
+}: {
+  image: string
+  imageAlt: string
+  title: string
+  lead: string
+  body: string[]
+  facts: string[]
+  reverse?: boolean
+}) {
+  return (
+    <section className="snap-start bg-[#efe8d3] text-[#1d1913]">
+      <div className={cn("mx-auto grid min-h-[100svh] w-full max-w-[1720px] items-center gap-12 px-5 py-20 sm:px-8 lg:grid-cols-[1.05fr_0.95fr] lg:px-10", reverse && "lg:grid-cols-[0.95fr_1.05fr]")}>
+        <div className={cn("max-w-3xl", reverse && "lg:order-2")}>
+          <h2 className="font-['Vercetti',Geist,ui-sans-serif] text-[clamp(3rem,6vw,5.6rem)] leading-[0.9] tracking-[-0.03em]">
+            {title}
+          </h2>
+          <p className="mt-6 max-w-[62ch] text-[clamp(1.25rem,2vw,1.75rem)] leading-tight text-[#8d2024]">
+            {lead}
+          </p>
+          <div className="mt-8 grid max-w-[70ch] gap-5 text-base leading-7 text-[#3b352d]">
+            {body.map((paragraph) => (
+              <p key={paragraph}>{paragraph}</p>
+            ))}
+          </div>
+          <div className="mt-10 grid gap-3">
+            {facts.map((fact) => (
+              <div key={fact} className="grid grid-cols-[16px_1fr] gap-3 border-t border-[#1d1913]/22 pt-3 text-sm leading-6 text-[#3b352d]">
+                <span className="mt-2 h-2 w-2 bg-[#ce4748]" />
+                <span>{fact}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className={cn("flex justify-center", reverse && "lg:order-1")}>
+          <img
+            src={image}
+            alt={imageAlt}
+            loading="lazy"
+            className="w-full max-w-[520px] object-contain mix-blend-multiply"
+          />
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function ProofLine({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="border-t border-[#fff8e7]/30 pt-4">
+      <h3 className="text-xl font-semibold leading-tight">{title}</h3>
+      <p className="mt-2 max-w-[64ch] text-base leading-7 text-[#fff8e7]/76">{body}</p>
+    </div>
+  )
+}
+
+function DispatchComparison() {
+  const rows = [
+    { label: "Conventional baseline", gas: 80, wind: 12, flexible: 0, color: "#8d2024" },
+    { label: "Tiangou target state", gas: 15, wind: 58, flexible: 27, color: "#1f8f54" },
+  ]
+
+  return (
+    <div>
+      <div className="flex items-end justify-between gap-4 border-b border-[#1d1913]/24 pb-4">
+        <div>
+          <h3 className="text-2xl font-semibold">Dispatch comparison</h3>
+          <p className="mt-1 text-sm leading-6 text-[#3b352d]">Illustrative target logic for the next solver layer.</p>
+        </div>
+        <span className="font-['Vercetti',Geist,ui-sans-serif] text-3xl text-[#8d2024]">15%</span>
+      </div>
+      <div className="mt-7 grid gap-8">
+        {rows.map((row) => (
+          <div key={row.label}>
+            <div className="mb-3 flex items-center justify-between gap-4 text-sm">
+              <span className="font-semibold">{row.label}</span>
+              <span className="text-[#3b352d]">gas turbine support</span>
+            </div>
+            <div className="flex h-12 overflow-hidden border border-[#1d1913]/24">
+              <div className="grid place-items-center text-xs font-semibold text-[#fff8e7]" style={{ width: `${row.gas}%`, backgroundColor: row.color }}>Gas</div>
+              <div className="grid place-items-center text-xs font-semibold text-[#1d1913]" style={{ width: `${row.wind}%`, backgroundColor: "#1f8f54" }}>Wind</div>
+              <div className="grid place-items-center text-xs font-semibold text-[#1d1913]" style={{ width: `${row.flexible}%`, backgroundColor: "#2777b8" }}>Flex</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-7 text-sm leading-6 text-[#3b352d]">
+        This section is deliberately framed as a target outcome. The current repo demonstrates real-grid stress simulation and action visualization; dispatch optimization is the next solver integration layer.
+      </p>
+    </div>
+  )
+}
+
+function MarketStep({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="border border-[#fff8e7]/24 p-5">
+      <h3 className="text-2xl font-semibold leading-tight">{title}</h3>
+      <p className="mt-3 max-w-[70ch] text-base leading-7 text-[#fff8e7]/72">{body}</p>
     </div>
   )
 }
