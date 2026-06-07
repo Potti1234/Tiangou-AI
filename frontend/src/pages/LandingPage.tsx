@@ -72,7 +72,7 @@ export function LandingPage() {
         <header className="relative z-[1] mx-auto flex w-full max-w-[1720px] items-center justify-between gap-4 px-5 py-5 sm:px-8 lg:px-10">
           <Link
             to="/"
-            className="grid h-14 w-14 place-items-center border border-[#1d1913] bg-[#fff8e7]/82 p-2 shadow-[4px_4px_0_rgba(29,25,19,0.16)] transition hover:bg-[#fff8e7]"
+            className="grid h-14 w-14 place-items-center transition hover:opacity-75"
             aria-label="Tiangou-AI home"
           >
             <img src={tiangouLogo} alt="" aria-hidden="true" className="h-full w-full object-contain" />
