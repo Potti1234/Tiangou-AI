@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "@tanstack/react-router"
-import { Activity, AlertTriangle, CircleDot, Factory, Loader2, Play, PlugZap, RotateCcw, Zap } from "lucide-react"
+import { Activity, AlertTriangle, CircleDot, Cpu, Factory, Loader2, Play, PlugZap, RotateCcw, Zap } from "lucide-react"
 import { CartesianGrid, Line, LineChart, ReferenceLine, XAxis, YAxis } from "recharts"
 
 import { Badge } from "@/components/ui/badge"
@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils"
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ??
-  "http://127.0.0.1:8000"
+  "/api"
 
 const HONG_KONG_CENTER: [number, number] = [114.1694, 22.3193]
 const IMPORTANT_CONSUMER_LIMIT = 1000
@@ -89,12 +89,17 @@ type DynamicSimulationResponse = {
     }
     synthetic_assumption_counts: Record<string, number>
   }
-  pinn_status: {
-    checkpoint_loaded: boolean
-    H_estimated: number
-    startup_training: boolean
-    checkpoint_status: string
-  }
+  pinn_status: PinnStatus
+}
+
+type PinnStatus = {
+  checkpoint_loaded: boolean
+  checkpoint_path: string
+  checkpoint_status: string
+  H_estimated: number
+  model_params: number
+  startup_training: boolean
+  training_data_dependency?: string
 }
 
 type ScenarioPayload = {
@@ -252,6 +257,12 @@ function outcomeClass(outcome: string | undefined) {
   return "border-red-700/30 bg-red-50 text-red-800"
 }
 
+function pinnStatusClass(status: PinnStatus | null) {
+  if (!status) return "border-zinc-300 bg-zinc-100 text-zinc-600"
+  if (status.checkpoint_loaded) return "border-emerald-700/30 bg-emerald-50 text-emerald-800"
+  return "border-amber-700/30 bg-amber-50 text-amber-800"
+}
+
 function routeCoordinates(asset: GridAsset): [number, number][] {
   return (asset.geometry ?? []).map((point) => [point.lon, point.lat])
 }
@@ -332,6 +343,7 @@ export function DynamicSimulationPage() {
   const [playing, setPlaying] = useState(false)
   const [modelMode, setModelMode] = useState<ModelMode>("full_demo")
   const [result, setResult] = useState<DynamicSimulationResponse | null>(null)
+  const [pinnStatus, setPinnStatus] = useState<PinnStatus | null>(null)
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null)
   const [consumerProxies, setConsumerProxies] = useState<ConsumerProxyMarker[]>([])
   const [loading, setLoading] = useState(true)
@@ -356,19 +368,22 @@ export function DynamicSimulationPage() {
     setError(null)
     try {
       const scenarioParams = new URLSearchParams({ model_mode: modelMode })
-      const [scenarioResponse, dashboardResponse, consumerResponse] = await Promise.all([
+      const [scenarioResponse, dashboardResponse, consumerResponse, pinnResponse] = await Promise.all([
         fetch(`${API_BASE_URL}/dynamic/scenarios?${scenarioParams}`),
         fetch(`${API_BASE_URL}/grid/dashboard-snapshot?${dashboardQuery}`),
         fetch(`${API_BASE_URL}/grid/consumer-proxies/important?region_key=hong-kong&limit=${IMPORTANT_CONSUMER_LIMIT}`),
+        fetch(`${API_BASE_URL}/dynamic/pinn-status`),
       ])
       if (!scenarioResponse.ok) throw new Error(`Dynamic scenarios API returned ${scenarioResponse.status}`)
       if (!dashboardResponse.ok) throw new Error(`Dashboard snapshot API returned ${dashboardResponse.status}`)
       if (!consumerResponse.ok) throw new Error(`Consumer proxy API returned ${consumerResponse.status}`)
+      if (!pinnResponse.ok) throw new Error(`PINN status API returned ${pinnResponse.status}`)
       const scenarioPayload = await scenarioResponse.json() as ScenarioPayload
       setScenarios(scenarioPayload.scenarios)
       setGridSource(scenarioPayload.grid_source)
       setDashboard(await dashboardResponse.json() as DashboardSnapshot)
       setConsumerProxies(await consumerResponse.json() as ConsumerProxyMarker[])
+      setPinnStatus(await pinnResponse.json() as PinnStatus)
       const availableIds = new Set(scenarioPayload.scenarios.filter((scenario) => scenario.available).map((scenario) => scenario.id))
       if (!availableIds.has(selectedScenario)) {
         setSelectedScenario(availableIds.has("import_loss") ? "import_loss" : availableIds.has("largest_generator_trip") ? "largest_generator_trip" : [...availableIds][0] ?? "")
@@ -402,6 +417,7 @@ export function DynamicSimulationPage() {
       const payload = await response.json() as DynamicSimulationResponse
       setResult(payload)
       setGridSource(payload.grid_source)
+      setPinnStatus(payload.pinn_status)
       setCursor(Math.min(30, Math.max(payload.frames.length - 1, 0)))
       setPlaying(false)
     } catch (err) {
@@ -503,6 +519,26 @@ export function DynamicSimulationPage() {
             <OutcomePanel label="No stabilization" outcome={result?.outcome_A} state={currentFrame?.A} />
             <OutcomePanel label="Tiangou active" outcome={result?.outcome_B} state={currentFrame?.B} />
           </div>
+
+          <Card className="rounded-[8px] bg-[#fbfbfa]">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Cpu className="size-4" />
+                PINN model
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Badge variant="outline" className={cn("rounded-[3px] px-2 py-1", pinnStatusClass(pinnStatus))}>
+                {pinnStatus?.checkpoint_loaded ? "checkpoint loaded" : pinnStatus?.checkpoint_status?.replaceAll("_", " ") ?? "loading"}
+              </Badge>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <Metric label="Estimated H" value={`${formatNumber(pinnStatus?.H_estimated, 3)} s`} />
+                <Metric label="Params" value={formatNumber(pinnStatus?.model_params)} />
+                <Metric label="Startup train" value={pinnStatus?.startup_training ? "yes" : "no"} />
+                <Metric label="Checkpoint" value={pinnStatus?.checkpoint_path?.split(/[\\/]/).pop() ?? "n/a"} />
+              </div>
+            </CardContent>
+          </Card>
 
           <Card className="rounded-[8px] bg-[#fbfbfa]">
             <CardHeader className="pb-2">
