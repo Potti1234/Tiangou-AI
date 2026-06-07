@@ -7,6 +7,7 @@ import blackoutFrame02 from "@/assets/landing/blackout-frame-02-partial.png"
 import blackoutFrame03 from "@/assets/landing/blackout-frame-03-cascade.png"
 import blackoutFrame04 from "@/assets/landing/blackout-frame-04-dark.png"
 import heroBackground from "@/assets/landing-hero-bg.png"
+import tiangouLogo from "@/assets/tiangou-logo-transparent-no-text.png"
 import { Button } from "@/components/ui/button"
 
 const BLACKOUT_FRAMES = [
@@ -71,10 +72,10 @@ export function LandingPage() {
         <header className="relative z-[1] mx-auto flex w-full max-w-[1720px] items-center justify-between gap-4 px-5 py-5 sm:px-8 lg:px-10">
           <Link
             to="/"
-            className="grid h-12 w-12 place-items-center border border-[#1d1913] bg-[#ce4748] text-sm font-semibold text-[#fff8e7]"
+            className="grid h-14 w-14 place-items-center border border-[#1d1913] bg-[#fff8e7]/82 p-2 shadow-[4px_4px_0_rgba(29,25,19,0.16)] transition hover:bg-[#fff8e7]"
             aria-label="Tiangou-AI home"
           >
-            TG
+            <img src={tiangouLogo} alt="" aria-hidden="true" className="h-full w-full object-contain" />
           </Link>
           <nav className="hidden items-center gap-8 text-sm font-medium text-[#1d1913]/78 md:flex">
             <Link to="/dashboard" className="transition hover:text-[#8d2024]">
