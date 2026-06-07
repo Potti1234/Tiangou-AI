@@ -1,5 +1,16 @@
 const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "http://localhost:8000").replace(/\/$/, "");
 
+function websocketUrl(path) {
+  if (BACKEND_URL.startsWith("http://") || BACKEND_URL.startsWith("https://")) {
+    return `${BACKEND_URL.replace(/^http/, "ws")}${path}`;
+  }
+
+  const base = typeof window === "undefined" ? "http://localhost" : window.location.origin;
+  const url = new URL(`${BACKEND_URL}${path}`, base);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
 export async function fetchLiveState({ signal } = {}) {
   const response = await fetch(`${BACKEND_URL}/grid/state`, {
     method: "GET",
@@ -23,7 +34,7 @@ export async function runSimulation(scenario, duration_s = 400, { signal } = {})
 
 export function connectLiveSocket(onSnapshot, onError) {
   if (typeof WebSocket === "undefined") return () => {};
-  const wsUrl = BACKEND_URL.replace(/^http/, "ws") + "/ws/live";
+  const wsUrl = websocketUrl("/ws/live");
   let socket;
   try {
     socket = new WebSocket(wsUrl);
