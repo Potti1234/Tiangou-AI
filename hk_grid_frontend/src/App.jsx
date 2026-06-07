@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import Header from './components/Header.jsx'
 import GridPanel from './components/GridPanel.jsx'
+import CombinedFreqChart from './components/CombinedFreqChart.jsx'
 import './App.css'
 
 const API = '/api'
@@ -145,14 +146,13 @@ export default function App() {
       )}
 
       {simData && !loading && (
+        <>
         <div className="split-view">
           <GridPanel
             side="before"
             label="CONVENTIONAL GRID"
             subLabel="No Intervention"
             frame={frameA}
-            freqHistory={freqHistA}
-            timeHistory={timeHist}
             co2={co2A}
             outcome={simData.outcome_A}
             kpis={simData.kpis}
@@ -163,11 +163,9 @@ export default function App() {
           <div className="divider" />
           <GridPanel
             side="after"
-            label="GRIDGUARD AI ACTIVE"
+            label="TIANGOU AI ACTIVE"
             subLabel="PINN-Guided Dispatch"
             frame={frameB}
-            freqHistory={freqHistB}
-            timeHistory={timeHist}
             co2={co2B}
             co2Baseline={co2A}
             outcome={simData.outcome_B}
@@ -177,6 +175,12 @@ export default function App() {
             totalFrames={simData.frames.length}
           />
         </div>
+        <CombinedFreqChart
+          freqHistA={freqHistA}
+          freqHistB={freqHistB}
+          timeHistory={timeHist}
+        />
+        </>
       )}
 
       {!simData && !loading && !error && (

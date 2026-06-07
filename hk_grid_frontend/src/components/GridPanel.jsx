@@ -1,6 +1,5 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import HKMap from './HKMap.jsx'
-import FreqChart from './FreqChart.jsx'
 import './GridPanel.css'
 
 const DISTURBANCE_T = 30
@@ -21,23 +20,10 @@ function statusInfo(level, side) {
   return { text: 'STABLE', cls: 'status-stable' }
 }
 
-function blackoutEta(freqHistory, totalFrames, frameT) {
-  if (!freqHistory?.length) return null
-  const f = freqHistory[freqHistory.length - 1]
-  if (f >= 49.0) return null
-  const rocof = freqHistory.length > 5
-    ? (freqHistory[freqHistory.length - 1] - freqHistory[freqHistory.length - 6]) / 5
-    : -0.05
-  if (rocof >= 0) return null
-  const secsLeft = Math.max(0, (f - 47.0) / (-rocof))
-  const m = Math.floor(secsLeft / 60)
-  const s = Math.floor(secsLeft % 60)
-  return `${m}:${String(s).padStart(2, '0')}`
-}
 
 export default function GridPanel({
   side, label, subLabel,
-  frame, freqHistory, timeHistory, co2, co2Baseline,
+  frame, co2, co2Baseline,
   outcome, kpis, actions, frameT, totalFrames,
 }) {
   const isAfter = side === 'after'
@@ -50,12 +36,22 @@ export default function GridPanel({
   const rf = frame?.renewable_fraction ?? 0
   const rocof = Math.abs(frame?.df_dt ?? 0)
 
+  const [currentAction, setCurrentAction] = useState(null)
+  const [actionKey, setActionKey] = useState(0)
+
+  useEffect(() => {
+    if (actions.length === 0) return
+    const latest = actions[actions.length - 1]
+    if (!currentAction || latest.t !== currentAction.t || latest.text !== currentAction.text) {
+      setCurrentAction(latest)
+      setActionKey(k => k + 1)
+    }
+  }, [actions])
+
   const isBlackout = !isAfter && f < 1.0
   const status   = isBlackout
     ? { text: 'BLACKOUT', cls: 'status-critical' }
     : statusInfo(rl, side)
-  const eta      = !isAfter && !isBlackout ? blackoutEta(freqHistory, totalFrames, frameT) : null
-  const finalBad = !isAfter && outcome === 'BLACKOUT'
 
   const co2Pct   = isAfter && co2Baseline > 0
     ? Math.round((1 - co2 / co2Baseline) * 100)
@@ -100,42 +96,12 @@ export default function GridPanel({
 
       </div>
 
-      {/* ── alert / stable banner ────────────────── */}
-      {isBlackout && (
-        <div className="alert-banner alert-banner--blackout">
-          <span className="alert-icon">☠</span>
-          <strong>TOTAL GRID BLACKOUT</strong> — Cascade relay failure — frequency collapsed to 0 Hz
-        </div>
-      )}
-      {!isAfter && !isBlackout && (eta || f < 49.5) && (
-        <div className="alert-banner alert-banner--critical">
-          <span className="alert-icon">⚠</span>
-          {eta
-            ? <><strong>BLACKOUT IN {eta}</strong> — Insufficient inertia to absorb generation loss</>
-            : <><strong>FREQUENCY CRITICAL</strong> — {fmtFreq(f)} Hz — cascade risk</>
-          }
-        </div>
-      )}
-      {!isAfter && !isBlackout && f >= 49.5 && f < 49.8 && (
-        <div className="alert-banner alert-banner--warn">
-          <span className="alert-icon">◎</span>
-          <strong>FREQUENCY ALERT</strong> — {fmtFreq(f)} Hz — primary response active
-        </div>
-      )}
-      {isAfter && (outcome === 'STABLE' || f >= 49.8) && (
-        <div className="alert-banner alert-banner--stable">
-          <span className="alert-icon">✓</span>
-          <strong>STABLE</strong> — Optimal dispatch active, blackout prevented
-        </div>
-      )}
-      {isAfter && actions.length > 0 && (
-        <div className="action-log">
-          {actions.map((a, i) => (
-            <div key={i} className="action-log-entry">
-              <span className="action-log-time">t={a.t}s</span>
-              <span className="action-log-text">⚡ {a.text}</span>
-            </div>
-          ))}
+      {isAfter && currentAction && (
+        <div key={actionKey} className="action-log">
+          <div className="action-log-entry">
+            <span className="action-log-time">t={currentAction.t}s</span>
+            <span className="action-log-text">⚡ {currentAction.text}</span>
+          </div>
         </div>
       )}
 
@@ -150,30 +116,6 @@ export default function GridPanel({
 
       {/* ── bottom section ───────────────────────── */}
       <div className="panel-bottom">
-        <div className="freq-chart-wrap">
-          <div className="section-title">
-            {isAfter
-              ? 'AI RESPONSE — Frequency stabilised'
-              : isBlackout
-                ? 'GRID BLACKOUT — Cascade collapse'
-                : 'FREQUENCY TRAJECTORY'
-            }
-            <span className="section-subtitle">
-              {isAfter
-                ? ' GridGuard dispatch active'
-                : isBlackout
-                  ? ' All generators tripped — frequency collapsed to 0 Hz'
-                  : ' Real-time frequency decline'
-              }
-            </span>
-          </div>
-          <FreqChart
-            freqHistory={freqHistory}
-            timeHistory={timeHistory}
-            side={side}
-          />
-        </div>
-
         {/* ── physics readouts ─────────────────────── */}
         <div className="physics-row">
           <PhysicsItem label="H (phys)" value={H.toFixed(3)} unit="s" />

@@ -1,4 +1,5 @@
 import React from 'react'
+import tianguoLogo from '../assets/tiangou-logo-transparent-no-text.png'
 import './Header.css'
 
 export default function Header({
@@ -14,24 +15,12 @@ export default function Header({
     <header className="header">
       <div className="header-left">
         <div className="logo">
-          <div className="logo-icon">
-            <svg viewBox="0 0 32 32" fill="none">
-              <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="2"/>
-              <path d="M16 6 L20 14 L16 12 L20 22 L12 14 L16 16 Z"
-                    fill="currentColor" opacity="0.9"/>
-            </svg>
-          </div>
-          <span className="logo-text">GridGuard AI</span>
+          <img src={tianguoLogo} alt="Tiangou AI" className="logo-img" />
+          <span className="logo-text">TIANGOU AI</span>
         </div>
       </div>
 
-      <div className="header-center">
-        <h1 className="title">
-          GridGuard AI — Conventional Grid vs Physics-Informed Digital Twin
-        </h1>
-      </div>
-
-      <div className="header-right">
+<div className="header-right">
         <select
           className="control-select"
           value={scenario}

@@ -135,7 +135,8 @@ def _build_actions(grid_config: dict[str, Any], ev_shed_mw: float) -> list[dict[
     candidates = sorted(
         [
             source for source in grid_config.get("sources", [])
-            if source.get("type") in {"coal", "gas_ccgt", "other_dispatchable", "generic_capacity_equivalent"} and float(source.get("capacity_mw") or 0.0) > 0
+            # Exclude generic_capacity_equivalent — synthetic PowerModels placeholder with no physical plant
+            if source.get("type") in {"coal", "gas_ccgt", "other_dispatchable"} and float(source.get("capacity_mw") or 0.0) > 0
         ],
         key=lambda source: float(source.get("capacity_mw") or 0.0),
         reverse=True,

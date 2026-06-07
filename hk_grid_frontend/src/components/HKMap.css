@@ -1,14 +1,48 @@
 .hkmap {
   width: 100%;
   height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
-.hkmap-svg {
+.hkmap .leaflet-container {
   width: 100%;
   height: 100%;
+  background: #e8e4dc;
 }
 
-.map-node { cursor: default; }
+/* Permanent node info labels */
+.node-tooltip.leaflet-tooltip {
+  background: rgba(7, 9, 15, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  padding: 4px 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.node-tooltip.leaflet-tooltip::before {
+  display: none;
+}
+
+.node-tooltip-name {
+  font-size: 9px;
+  font-weight: 700;
+  color: #c8d4e0;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.node-tooltip-mw {
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  color: #e8edf5;
+  font-weight: 600;
+  margin-top: 1px;
+}
+
+.node-tooltip-load {
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  margin-top: 1px;
+}

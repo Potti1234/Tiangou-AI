@@ -1,3 +1,4 @@
+import asyncio
 import json
 from dataclasses import dataclass
 from contextlib import asynccontextmanager
@@ -6,7 +7,7 @@ from threading import RLock
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -25,6 +26,7 @@ from app.dynamic.adapter import DynamicGridConfig, build_dynamic_config
 from app.dynamic.dual_timeline import DualTimelineSimulation
 from app.dynamic.pinn_model import load_pinn_checkpoint
 from app.dynamic.scenarios import build_scenarios, scenario_by_id
+from app.dynamic.simulator import GridSimulator
 from app.load_proxies import PROXY_GROUPS, normalize_consumer_proxy_element, rows_to_consumer_proxies
 from app.overpass import OverpassClient, OverpassError, build_consumer_proxy_query, build_power_query
 from app.regions import REGIONS, get_region
@@ -99,10 +101,52 @@ _DASHBOARD_CACHE_LOCK = RLock()
 _DYNAMIC_PINN_MODEL: Any | None = None
 _DYNAMIC_PINN_STATUS: dict[str, Any] | None = None
 
+# Live simulation state — stepped at 1 Hz in background
+_LIVE_SIM: GridSimulator | None = None
+_LIVE_STATE: dict[str, Any] | None = None
+_LIVE_WS_CLIENTS: list[WebSocket] = []
+
+
+async def _live_simulation_loop() -> None:
+    """Lazy-init a GridSimulator from the real OSM grid, then step it at 1 Hz."""
+    global _LIVE_SIM, _LIVE_STATE
+    loop = asyncio.get_event_loop()
+    while True:
+        await asyncio.sleep(1.0)
+        if _LIVE_SIM is None:
+            try:
+                config = await loop.run_in_executor(None, _build_dynamic_grid_config)
+                pinn, _ = await loop.run_in_executor(None, _dynamic_pinn)
+                _LIVE_SIM = GridSimulator(
+                    config.grid_config,
+                    config.demand_profile_mw,
+                    config.ev_stations,
+                    pinn,
+                    start_t=16 * 3600,
+                )
+            except Exception:
+                continue
+        try:
+            state = _LIVE_SIM.step()
+            _LIVE_STATE = state.to_dict()
+            if _LIVE_WS_CLIENTS:
+                payload = json.dumps(_LIVE_STATE)
+                dead: list[WebSocket] = []
+                for ws in list(_LIVE_WS_CLIENTS):
+                    try:
+                        await ws.send_text(payload)
+                    except Exception:
+                        dead.append(ws)
+                for ws in dead:
+                    _LIVE_WS_CLIENTS.remove(ws)
+        except Exception:
+            pass
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    asyncio.create_task(_live_simulation_loop())
     yield
 
 
@@ -940,6 +984,30 @@ def dynamic_simulate(req: DynamicSimulateRequest) -> dict[str, Any]:
 def dynamic_pinn_status() -> dict[str, Any]:
     _, status = _dynamic_pinn()
     return status
+
+
+@app.get("/dynamic/state")
+def dynamic_live_state() -> dict[str, Any]:
+    if _LIVE_STATE is None:
+        raise HTTPException(status_code=503, detail="Live simulation not yet initialized.")
+    return _LIVE_STATE
+
+
+@app.websocket("/dynamic/ws/live")
+async def dynamic_ws_live(websocket: WebSocket) -> None:
+    await websocket.accept()
+    _LIVE_WS_CLIENTS.append(websocket)
+    try:
+        if _LIVE_STATE is not None:
+            await websocket.send_text(json.dumps(_LIVE_STATE))
+        while True:
+            await asyncio.sleep(30)
+            await websocket.send_text(json.dumps({"type": "ping"}))
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if websocket in _LIVE_WS_CLIENTS:
+            _LIVE_WS_CLIENTS.remove(websocket)
 
 
 @app.get("/overpass-query/{region_key}")

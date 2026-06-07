@@ -7,7 +7,6 @@ Power grids are designed to operate at a fixed frequency. When generation and de
 
 We grounded this in a real grid. Our Hong Kong energy grid was reconstructed from OpenStreetMap data. That gave us real transmission distances, node locations, and a generation mix that reflects an actual system: coal and gas as the backbone, a nuclear import link, offshore wind, solar, and grid-scale battery storage.
 
-That realistic topology is what drives the simulation. Disturbances have real propagation paths, generation has real ramp constraints, and the frequency response reflects a grid with a specific mix of fast and slow resources.
 
 [0:42 – 1:22 — WHAT TIANGOU AI DOES]
 
