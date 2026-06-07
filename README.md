@@ -90,16 +90,14 @@ Services exposed by the root Compose file:
 | Service | URL |
 |---|---|
 | Landing/GridSFM frontend | `http://localhost:8080` |
-| HK grid simulation backend | `http://localhost:8000` |
-| HK grid dashboard | `http://localhost:8082` |
-
-The HK grid dashboard is served by nginx and proxies `/api/*` and `/ws/*` to the `hk-grid-backend` service. No environment variables are required for `hk_grid_backend/` or `hk_grid_frontend/`; the frontend uses relative `/api` paths and the backend uses committed local config/checkpoint files.
 
 To deploy only the HK grid simulation backend and dashboard:
 
 ```bash
 docker compose -f docker-compose.hk-grid.yml up --build -d
 ```
+
+The HK grid dashboard is exposed at `http://localhost:8082`. The HK backend stays internal to that Compose deployment on port `8000`; nginx proxies `/api/*` and `/ws/*` to `hk-grid-backend:8000`. No environment variables are required for `hk_grid_backend/` or `hk_grid_frontend/`.
 
 ---
 
