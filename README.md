@@ -16,14 +16,50 @@ The simulation runs two parallel timelines side by side: one with no interventio
 
 ---
 
-## Architecture
+## Repository layout
 
-| Component | Description | Port |
-|---|---|---|
-| `hk_grid_backend/` | Simulation engine with hardcoded HK grid config and scenario runner | 8000 |
-| `app/` | FastAPI backend — OSM grid ingestion, PINN, dynamic simulation | 8001 |
-| `hk_grid_frontend/` | Primary React dashboard — dual-panel comparison with HK Leaflet map | 5173 |
-| `frontend/` | Landing page | — |
+```
+Tiangou-AI/
+├── hk_grid_backend/        # FastAPI simulation server (port 8000)
+│   ├── main.py             #   API routes — /simulate, /scenarios, /config
+│   ├── simulation/         #   Swing-equation engine, dual-timeline runner
+│   ├── pinn/               #   PINN model definition and training script
+│   ├── pinn_checkpoint.pt  #   Trained checkpoint loaded at startup
+│   └── config/             #   HK grid topology, generator parameters
+│
+├── hk_grid_frontend/       # React dashboard (Vite, port 5173)
+│   └── src/
+│       ├── App.jsx          #   Layout, simulation state, playback loop
+│       ├── components/
+│       │   ├── Header.jsx          # Scenario picker, run/play controls, timeline scrubber
+│       │   ├── GridPanel.jsx       # Per-side panel (status cards, map, physics readouts)
+│       │   ├── HKMap.jsx           # Leaflet map — HK nodes, transmission edges, live tooltips
+│       │   └── CombinedFreqChart.jsx  # Shared frequency chart — both timelines overlaid
+│       └── assets/          #   Tiangou AI logo
+│
+├── app/                    # FastAPI backend — OSM ingestion + PINN research path (port 8001)
+│   ├── main.py             #   Full API: ingest, topology, simulation, PINN, export
+│   ├── dynamic/            #   PINN model, swing-equation simulator, dispatch logic
+│   └── ...                 #   OSM ingestion, topology reconstruction, PowerModels export
+│
+├── frontend/               # Landing page (React/TypeScript, MapLibre)
+│
+├── pinn/                   # PINN training notebooks and Spain blackout data exploration
+│   ├── src/                #   Model and training code
+│   ├── notebooks/          #   Jupyter experiments
+│   └── data/               #   Spain 28-Apr-2025 blackout dataset
+│
+├── data/                   # Public datasets and assumption tables
+│   ├── raw/                #   HK Electric, EMSD, Census & Statistics CSVs
+│   └── assumptions/        #   Line ratings, transformer defaults, generator parameters
+│
+├── tests/                  # pytest tests for the app/ backend
+├── third_party/            # Vendored GridSFM Julia solver pipeline (MIT)
+├── docker-compose.yml               # Full stack (app/ + frontend/)
+└── docker-compose.hk-grid.yml       # HK demo only (hk_grid_backend + hk_grid_frontend)
+```
+
+The demo at https://eurotech.lukaspottner.com/ runs `hk_grid_backend` + `hk_grid_frontend` only. The `app/` backend is the deeper research path with OSM ingestion, topology reconstruction, and the PowerModels/GridSFM export pipeline.
 
 ---
 
