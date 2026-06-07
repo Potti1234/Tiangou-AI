@@ -1684,7 +1684,7 @@ function AnalyticsHeader({
             </TabsList>
           </Tabs>
           <Button asChild variant="outline" className="rounded-[4px] border-zinc-300 bg-white/92">
-            <Link to="/">Map</Link>
+            <Link to="/dashboard">Map</Link>
           </Button>
           <Button asChild variant="outline" className="rounded-[4px] border-zinc-300 bg-white/92">
             <Link to="/dynamic">Dynamic</Link>

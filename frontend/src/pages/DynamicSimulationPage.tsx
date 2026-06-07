@@ -308,7 +308,7 @@ function DynamicHeader({
             </TabsList>
           </Tabs>
           <Button asChild variant="outline" className="h-8 rounded-[4px] border-zinc-300 bg-white/92">
-            <Link to="/">Map</Link>
+            <Link to="/dashboard">Map</Link>
           </Button>
           <Button asChild variant="outline" className="h-8 rounded-[4px] border-zinc-300 bg-white/92">
             <Link to="/analytics">Analytics</Link>
