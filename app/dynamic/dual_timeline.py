@@ -36,31 +36,45 @@ class DualTimelineSimulation:
         for step in range(duration_s):
             event = scenario if step == DISTURBANCE_T else None
             state_A = sim_A.step(disturbance=event)
+            state_B = sim_B.step(disturbance=event)
             actions_this_step: list[dict[str, Any]] = []
             intervention_triggered = False
-            if event is not None:
-                for action in self.dispatch.select_actions(
-                    1.0,
-                    sim_B.compute_H_system(),
-                    float(event.get("magnitude_mw") or 0.0),
-                    [48.8],
-                ):
-                    if action["id"] in applied:
-                        continue
-                    sim_B.apply_action(action)
-                    applied.add(action["id"])
-                    actions_this_step.append(action)
-                    intervention_triggered = True
-            state_B = sim_B.step(disturbance=event)
             trajectory = state_B.trajectory_60s
             if (trajectory and min(trajectory) < 49.5) or state_B.df_dt < -0.02 or state_B.risk_level in {"ALERT", "CRITICAL"}:
-                for action in self.dispatch.select_actions(state_B.risk_score, state_B.H_physical, state_B.Pm - state_B.Pe, trajectory):
+                for action in self.dispatch.regulate_on_trajectory(
+                    trajectory,
+                    f0=state_B.f,
+                    Pm_eff=state_B.Pm_eff,
+                    Pe=state_B.Pe,
+                    pinn_model=sim_B.pinn,
+                    gov_cap=_governor_capacity(sim_B),
+                    gov_output_init=sim_B._gov_output,
+                    gov_headroom=_governor_headroom(sim_B),
+                    gen_ramp_mw=sum(float(ramp["remaining_mw"]) for ramp in _generation_ramps(sim_B)),
+                    gen_ramp_rate=sum(float(ramp["rate_per_s"]) for ramp in _generation_ramps(sim_B)),
+                    dem_ramp_mw=sum(float(ramp["remaining_mw"]) for ramp in _demand_ramps(sim_B)),
+                    dem_ramp_rate=sum(float(ramp["rate_per_s"]) for ramp in _demand_ramps(sim_B)),
+                ):
                     if action["id"] in applied or action["id"] in {pending["id"] for pending in pending_actions}:
                         continue
                     validation = self.validator.validate(state_B, [action], sim_B)
-                    if validation["approved"] or action.get("lead_time_s", 0) <= 5:
-                        pending_actions.append({**action, "scheduled_t": step + int(action.get("lead_time_s") or 0)})
+                    if validation["approved"] or action.get("lead_time_s", 0) <= 5 or float(action.get("_improvement_hz") or 0.0) > 0.02:
+                        pending_actions.append({
+                            **action,
+                            "description": _regulation_description(action),
+                            "scheduled_t": step + int(action.get("lead_time_s") or 0),
+                        })
                         intervention_triggered = True
+                if not intervention_triggered and state_B.risk_level in {"ALERT", "CRITICAL"}:
+                    for action in self.dispatch.select_actions(state_B.risk_score, state_B.H_physical, state_B.Pm - state_B.Pe, trajectory):
+                        if action["id"] in applied or action["id"] in {pending["id"] for pending in pending_actions}:
+                            continue
+                        if int(action.get("lead_time_s") or 0) > 5:
+                            continue
+                        validation = self.validator.validate(state_B, [action], sim_B)
+                        if validation["approved"] or action.get("lead_time_s", 0) <= 5:
+                            pending_actions.append({**action, "scheduled_t": step + int(action.get("lead_time_s") or 0)})
+                            intervention_triggered = True
             ready = [action for action in pending_actions if action["scheduled_t"] <= step]
             for action in ready:
                 sim_B.apply_action(action)
@@ -110,3 +124,36 @@ def _compute_kpis(frames: list[dict[str, Any]]) -> dict[str, Any]:
         "time_to_alert_s": next((frame["t"] for frame in frames if frame["B"]["risk_level"] == "ALERT"), None),
         "time_to_critical_s": next((frame["t"] for frame in frames if frame["B"]["risk_level"] == "CRITICAL"), None),
     }
+
+
+def _governor_sources(simulator: GridSimulator) -> list[dict[str, Any]]:
+    return [
+        source for source in simulator.get_all_sources()
+        if source.get("online") and source.get("type") in {"coal", "gas_ccgt", "nuclear", "imports", "other_dispatchable", "generic_capacity_equivalent"}
+    ]
+
+
+def _governor_capacity(simulator: GridSimulator) -> float:
+    return sum(float(source.get("capacity_mw") or 0.0) for source in _governor_sources(simulator))
+
+
+def _governor_headroom(simulator: GridSimulator) -> float:
+    return sum(
+        max(0.0, float(source.get("capacity_mw") or 0.0) - float(source.get("current_output_mw") or 0.0))
+        for source in _governor_sources(simulator)
+    )
+
+
+def _generation_ramps(simulator: GridSimulator) -> list[dict[str, Any]]:
+    return [ramp for ramp in simulator._ramp_events if ramp.get("kind") == "generation"]
+
+
+def _demand_ramps(simulator: GridSimulator) -> list[dict[str, Any]]:
+    return [ramp for ramp in simulator._ramp_events if ramp.get("kind") not in {"generation", "generation_ramp_up"}]
+
+
+def _regulation_description(action: dict[str, Any]) -> str:
+    return (
+        f"PINN regulation: {action['description']} "
+        f"(nadir {action['_baseline_nadir_hz']:.2f}->{action['_predicted_nadir_hz']:.2f} Hz)"
+    )

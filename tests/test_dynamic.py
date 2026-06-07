@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.dynamic.adapter import build_dynamic_config
+from app.dynamic.dispatch import DispatchEngine
 from app.dynamic.scenarios import build_scenarios
 
 
@@ -86,6 +87,32 @@ def test_dynamic_scenario_builder_selects_real_grid_assets() -> None:
     assert scenarios["datacenter_spike"]["magnitude_mw"] == 25.0
     assert scenarios["renewable_weather_loss"]["affected_sources"] == ["Wind A", "Solar A"]
     assert scenarios["combined_stress"]["type"] == "combined"
+
+
+class _FixedPinn:
+    def get_H_estimate(self) -> float:
+        return 1.5
+
+
+def test_dynamic_dispatch_regulates_against_pinn_trajectory() -> None:
+    config = build_dynamic_config(_synthetic_case(), _consumer_proxies())
+    dispatch = DispatchEngine(config.grid_config, ev_shed_mw=25.0)
+
+    actions = dispatch.regulate_on_trajectory(
+        [50.0, 49.2, 49.1],
+        f0=49.2,
+        Pm_eff=500.0,
+        Pe=1200.0,
+        pinn_model=_FixedPinn(),
+        gov_cap=1200.0,
+        gov_output_init=0.0,
+        gov_headroom=700.0,
+    )
+
+    assert actions
+    assert all("_baseline_nadir_hz" in action for action in actions)
+    assert all("_predicted_nadir_hz" in action for action in actions)
+    assert actions[0]["id"] in {"shed_ev_charging", "fast_demand_response"}
 
 
 def test_dynamic_api_scenarios_and_simulation(monkeypatch) -> None:
