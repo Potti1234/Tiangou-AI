@@ -51,9 +51,14 @@ function frameOpacity(progress: number, index: number) {
 }
 
 export function LandingPage() {
+  useEffect(() => {
+    document.documentElement.classList.add("tiangou-landing-snap")
+    return () => document.documentElement.classList.remove("tiangou-landing-snap")
+  }, [])
+
   return (
     <main className="min-h-[100dvh] bg-[#efe8d3] text-[#1d1913]">
-      <section className="relative min-h-[100svh] overflow-hidden border-b border-[#1d1913]/20">
+      <section className="relative min-h-[100svh] snap-start snap-always overflow-hidden border-b border-[#1d1913]/20">
         <img
           src={heroBackground}
           alt=""
@@ -174,7 +179,7 @@ function BlackoutColdOpen() {
   const activeFrame = BLACKOUT_FRAMES[activeIndex]
 
   return (
-    <section ref={sectionRef} className="relative h-[420svh] bg-[#0f1212] text-[#fff8e7]">
+    <section ref={sectionRef} className="relative h-[420svh] snap-start snap-always bg-[#0f1212] text-[#fff8e7]">
       <div className="sticky top-0 h-[100svh] overflow-hidden">
         {BLACKOUT_FRAMES.map((frame, index) => (
           <img

@@ -22,6 +22,17 @@ body {
   min-height: 100dvh;
 }
 
+html.tiangou-landing-snap {
+  scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.tiangou-landing-snap {
+    scroll-behavior: auto;
+  }
+}
+
 button,
 input,
 select {
