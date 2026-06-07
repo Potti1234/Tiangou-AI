@@ -56,8 +56,7 @@
 
 | Item | Source | Roughly how much | License |
 |---|---|---|---|
-| `hk_grid_backend/` — HK-specific simulation backend including swing-equation simulator, PINN architecture, grid-state dataclass, risk scoring, and `hk_grid_frontend/` React dashboard | Written by the team in the hackathon as the starting point for this project; only standard library calls are used for the PINN and simulator | ~3,000 lines Python + ~2,500 lines React | — |
-| `app/` generic OSM pipeline (ingestion, topology, PowerModels builder, dynamic adapter) | Written during the hackathon | ~8,000 lines Python | — |
+| 'third_party/gridsfm_solver' gridoptimizing algorithm paper as inspiration for the grid creation pipeline | https://arxiv.org/pdf/2605.04289 and https://github.com/microsoft/GridSFM | MIT
 
 ---
 
